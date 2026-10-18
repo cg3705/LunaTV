@@ -72,10 +72,8 @@ https://tglmp04.akamaized.net/out/v1/898b1cbac7c747e3b1f3deb460e9b67e/manifest.m
 #EXTINF:-1 tvg-id="8TV.my@SD" tvg-name="马来西亚 8TV" tvg-logo="https://i.imgur.com/Jkx9W88.png" group-title="新加坡 & 马来西亚",马来西亚 8TV
 http://cdn6.163189.xyz/163189/8tv
 #EXTINF:-1 tvg-id="BeritaRTM.my@SD" tvg-name="马来西亚 Berita RTM（可能限地区）" tvg-logo="https://i.imgur.com/1Xzxsgl.png" group-title="新加坡 & 马来西亚",马来西亚 Berita RTM（可能限地区）
-#EXTVLCOPT:http-referrer=https://rtm-player.glueapi.io/
 https://d25tgymtnqzu8s.cloudfront.net/smil:berita/playlist.m3u8?id=5
 #EXTINF:-1 tvg-id="Okey.my@SD" tvg-name="马来西亚 Okey（可能限地区）" tvg-logo="https://i.imgur.com/V2jREQ5.png" group-title="新加坡 & 马来西亚",马来西亚 Okey（可能限地区）
-#EXTVLCOPT:http-referrer=https://rtm-player.glueapi.io/
 https://d25tgymtnqzu8s.cloudfront.net/smil:okey/playlist.m3u8?id=3
 #EXTINF:-1 tvg-id="NTDTV.us@East" tvg-name="新唐人 NTD" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/NTD_Logo_with_symbol.svg/960px-NTD_Logo_with_symbol.svg.png" group-title="海外华语",新唐人 NTD
 https://ntd02.akamaized.net/HD-NY/index.m3u8
@@ -140,7 +138,6 @@ https://livestar.siliconweb.com/starvod/star_int/star_int.m3u8
 #EXTINF:-1 tvg-id="EuronewsFrench.fr@SD" tvg-name="Euronews 法语新闻" tvg-logo="https://i.imgur.com/8t9mdg9.png" group-title="国际 & 英文",Euronews 法语新闻
 https://2f6c5bf4.wurl.com/master/f36d25e7e52f1ba8d7e56eb859c636563214f541/UmxheHhUVi1ldV9FdXJvbmV3c0ZyYW5jYWlzX0hMUw/playlist.m3u8
 #EXTINF:-1 tvg-id="RaiItalia.it@Australia" tvg-name="Rai Italia 意大利" tvg-logo="https://i.imgur.com/1nN4rEP.png" group-title="国际 & 英文",Rai Italia 意大利
-#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36
 https://d3k8wzt41aflvx.cloudfront.net/RAIHD/Live.m3u8
 #EXTINF:-1 tvg-id="ABNChina.us@SD" tvg-name="ABN China" tvg-logo="https://i.imgur.com/zagVLQH.png" group-title="宗教",ABN China
 https://mediaserver.abnvideos.com/streams/abnchina.m3u8
