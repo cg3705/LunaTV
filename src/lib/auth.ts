@@ -16,6 +16,15 @@ export function getAuthInfoFromCookie(request: NextRequest): {
   try {
     const decoded = decodeURIComponent(authCookie.value);
     const authData = JSON.parse(decoded);
+    // localstorage 模式只用密码登录（密码已由 middleware 校验），补上站长用户名，
+    // 以便需要用户名的接口（搜索、详情等）正常工作
+    if (
+      (process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage') === 'localstorage' &&
+      authData &&
+      !authData.username
+    ) {
+      authData.username = process.env.USERNAME || 'local';
+    }
     return authData;
   } catch (error) {
     return null;
