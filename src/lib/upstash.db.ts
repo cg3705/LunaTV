@@ -521,6 +521,9 @@ function getUpstashRedisClient(): Redis {
     client = new Redis({
       url: upstashUrl,
       token: upstashToken,
+      // Cloudflare Workers 中关闭自动管道：共享客户端会把不同请求的命令合并到同一个子请求，
+      // 发起请求结束后该子请求被取消，其他请求会一直挂起
+      enableAutoPipelining: false,
       // 可选配置
       retry: {
         retries: 3,
