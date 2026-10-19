@@ -6,16 +6,5 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "keep_names": false,
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
-  "vars": { "NEXT_PUBLIC_STORAGE_TYPE": "upstash" },
-  "env": {
-    "test": {
-      "name": "lunatv-test",
-      "vars": {
-        "NEXT_PUBLIC_STORAGE_TYPE": "localstorage",
-        "ENABLE_WEB_LIVE": "true",
-        "SEARCH_MAX_PAGE": "2",
-        "CONFIG_EXTRA_JSON": "{\"lives\":{\"hd\":{\"name\":\"高清直播（已测试）\",\"url\":\"https://raw.githubusercontent.com/cg3705/LunaTV/main/live/channels-hd.m3u\"}}}"
-      }
-    }
-  }
+  "vars": { "NEXT_PUBLIC_STORAGE_TYPE": "upstash" }
 }
