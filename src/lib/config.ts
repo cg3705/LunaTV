@@ -212,7 +212,9 @@ async function getInitConfig(configFile: string, subConfig: {
         process.env.ANNOUNCEMENT ||
         '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。',
       SearchDownstreamMaxPage:
-        Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) || 5,
+        Number(process.env.SEARCH_MAX_PAGE) ||
+        Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) ||
+        5,
       SiteInterfaceCacheTime: cfgFile.cache_time || 7200,
       DoubanProxyType:
         process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent',
@@ -296,6 +298,40 @@ async function getInitConfig(configFile: string, subConfig: {
   return adminConfig;
 }
 
+// 读取环境变量中的配置文件（仅在数据库中没有配置时使用）
+async function loadEnvConfigFile(): Promise<string> {
+  const parts: any[] = [];
+  for (const raw of [process.env.CONFIG_JSON, process.env.CONFIG_EXTRA_JSON]) {
+    const v = (raw || '').trim();
+    if (!v) continue;
+    if (/^https?:\/\//i.test(v)) {
+      try {
+        const res = await fetch(v);
+        if (res.ok) parts.push(await res.json());
+        else console.error('下载配置文件失败:', res.status);
+      } catch (e) {
+        console.error('下载配置文件失败:', e);
+      }
+    } else {
+      try {
+        parts.push(JSON.parse(v));
+      } catch (e) {
+        console.error('解析配置 JSON 失败:', e);
+      }
+    }
+  }
+  if (parts.length === 0) return '';
+  const merged: any = {};
+  for (const p of parts) {
+    Object.assign(merged, p, {
+      api_site: { ...(merged.api_site || {}), ...(p.api_site || {}) },
+      lives: { ...(merged.lives || {}), ...(p.lives || {}) },
+      custom_category: [...(merged.custom_category || []), ...(p.custom_category || [])],
+    });
+  }
+  return JSON.stringify(merged);
+}
+
 export async function getConfig(): Promise<AdminConfig> {
   // 命中未过期的内存缓存
   if (cachedConfig && Date.now() - cachedConfigAt < CONFIG_TTL_MS) {
@@ -324,8 +360,9 @@ export async function getConfig(): Promise<AdminConfig> {
     // db 中无配置，执行一次初始化
     const needInit = !adminConfig;
     if (!adminConfig) {
-      // 无数据库（localstorage 模式）时，可通过 CONFIG_JSON 环境变量提供初始配置
-      adminConfig = await getInitConfig(process.env.CONFIG_JSON || "");
+      // 无数据库（localstorage 模式）时，可通过环境变量提供初始配置：
+      // CONFIG_JSON 可以是 JSON 内容，也可以是配置文件网址；CONFIG_EXTRA_JSON 会合并进去（如直播源）
+      adminConfig = await getInitConfig(await loadEnvConfigFile());
     }
     adminConfig = configSelfCheck(adminConfig);
     cachedConfig = adminConfig;
