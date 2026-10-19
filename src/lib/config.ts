@@ -338,10 +338,8 @@ export async function getConfig(): Promise<AdminConfig> {
     return cachedConfig;
   }
 
-  // 已有在途读取则复用，避免并发重复打库
-  if (pendingConfig) {
-    return pendingConfig;
-  }
+  // 注意：不复用其他请求的在途读取。Cloudflare Workers 中，子请求归属于发起它的请求，
+  // 发起请求结束后该读取会被取消，复用它的请求会永远挂起（继续观看/收藏一直加载）。
 
   pendingConfig = (async () => {
     // 读 db
