@@ -48,29 +48,32 @@ export function generateStorageKey(source: string, id: string): string {
 // 导出便捷方法
 export class DbManager {
   private storage: IStorage;
-  private migrationPromise: Promise<void> | null = null;
+  private migrated = false;
 
   constructor() {
     this.storage = getStorage();
-    // 启动时自动触发数据迁移（异步，不阻塞构造）
+  }
+
+  /**
+   * 确保数据迁移已完成。
+   * 注意：在当前请求内执行，而不是在构造时启动后台任务让后续请求等待。
+   * Cloudflare Workers 中子请求归属于发起它的请求，发起请求结束后后台迁移会被取消，
+   * 等待它的请求（播放记录、收藏）会永远挂起。迁移已完成时只需读取一次完成标记。
+   */
+  private async ensureMigrated(): Promise<void> {
+    if (this.migrated) return;
     if (this.storage && typeof this.storage.migrateData === 'function') {
-      this.migrationPromise = this.storage.migrateData().then(async () => {
+      try {
+        await this.storage.migrateData();
         // 数据结构迁移完成后，执行密码哈希迁移
         if (typeof this.storage.migratePasswords === 'function') {
           await this.storage.migratePasswords();
         }
-      }).catch((err) => {
+      } catch (err) {
         console.error('数据迁移异常:', err);
-      });
+      }
     }
-  }
-
-  /** 等待迁移完成（内部方法，首次调用后 migrationPromise 会被置空） */
-  private async ensureMigrated(): Promise<void> {
-    if (this.migrationPromise) {
-      await this.migrationPromise;
-      this.migrationPromise = null;
-    }
+    this.migrated = true;
   }
 
   // 播放记录相关方法
