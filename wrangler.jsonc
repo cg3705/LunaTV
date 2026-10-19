@@ -9,7 +9,7 @@
   "env": {
     "test": {
       "name": "lunatv-test",
-      "vars": { "NEXT_PUBLIC_STORAGE_TYPE": "upstash" }
+      "vars": { "NEXT_PUBLIC_STORAGE_TYPE": "localstorage", "ENABLE_WEB_LIVE": "true" }
     }
   }
 }
