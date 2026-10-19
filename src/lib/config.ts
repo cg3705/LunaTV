@@ -224,7 +224,7 @@ async function getInitConfig(configFile: string, subConfig: {
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
       FluidSearch:
         process.env.NEXT_PUBLIC_FLUID_SEARCH !== 'false',
-      EnableWebLive: false,
+      EnableWebLive: process.env.ENABLE_WEB_LIVE === 'true',
     },
     UserConfig: {
       Users: [],
@@ -324,7 +324,8 @@ export async function getConfig(): Promise<AdminConfig> {
     // db 中无配置，执行一次初始化
     const needInit = !adminConfig;
     if (!adminConfig) {
-      adminConfig = await getInitConfig("");
+      // 无数据库（localstorage 模式）时，可通过 CONFIG_JSON 环境变量提供初始配置
+      adminConfig = await getInitConfig(process.env.CONFIG_JSON || "");
     }
     adminConfig = configSelfCheck(adminConfig);
     cachedConfig = adminConfig;
