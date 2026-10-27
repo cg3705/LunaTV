@@ -518,10 +518,11 @@ function PlayPageClient() {
   // 去广告相关函数
   /**
    * 去除 m3u8 中拼接的广告分段。
-   * 原理：采集站把广告视频用 #EXT-X-DISCONTINUITY 拼进正片。正片的切片时长高度统一，
-   * 广告是另外编码的，会出现"不合规格"的切片（例如结尾残片、不同的时长）。
-   * 规则：某个分段里含有不合规格的切片、且该分段很短（< 60 秒）时，判定为广告并整段删除。
-   * 保险：切片时长不统一的源不处理；删除总量过大时放弃过滤，原样返回。
+   * 采集站把广告视频用 #EXT-X-DISCONTINUITY 拼进正片，有两种可识别的特征：
+   * 1. 来源不同：广告切片来自另一个目录/服务器（另一个视频文件），正片切片几乎都来自同一个目录；
+   * 2. 规格不同：正片切片时长高度统一时，广告是另外编码的，会出现不合规格的切片。
+   * 满足任一特征、且分段很短的，判定为广告并整段删除。
+   * 保险：删除总量过大（超过 5 分钟或总时长 10%）时放弃过滤，原样返回。
    */
   function filterAdsFromM3U8(m3u8Content: string): string {
     if (!m3u8Content || !m3u8Content.includes('#EXTINF')) return m3u8Content;
@@ -529,10 +530,18 @@ function PlayPageClient() {
     const lines = m3u8Content.split(/\r?\n/);
     const header: string[] = [];
     const footer: string[] = [];
-    type Block = { lines: string[]; durs: number[] };
+    type Block = { lines: string[]; durs: number[]; dirs: string[] };
     const blocks: Block[] = [];
     let cur: Block | null = null;
     let seenSegment = false;
+    let pendingDur = 0;
+
+    // 切片所在目录（去掉文件名和参数），用来判断是否来自同一个视频文件
+    const dirOf = (uri: string) => {
+      const noQuery = uri.split('?')[0];
+      const idx = noQuery.lastIndexOf('/');
+      return idx >= 0 ? noQuery.slice(0, idx) : '';
+    };
 
     for (const line of lines) {
       if (line.startsWith('#EXT-X-ENDLIST')) {
@@ -540,7 +549,7 @@ function PlayPageClient() {
         continue;
       }
       if (line.startsWith('#EXT-X-DISCONTINUITY')) {
-        cur = { lines: [line], durs: [] };
+        cur = { lines: [line], durs: [], dirs: [] };
         blocks.push(cur);
         seenSegment = true;
         continue;
@@ -551,20 +560,34 @@ function PlayPageClient() {
       }
       seenSegment = true;
       if (!cur) {
-        cur = { lines: [], durs: [] };
+        cur = { lines: [], durs: [], dirs: [] };
         blocks.push(cur);
       }
       cur.lines.push(line);
       if (line.startsWith('#EXTINF:')) {
-        cur.durs.push(parseFloat(line.slice(8)) || 0);
+        pendingDur = parseFloat(line.slice(8)) || 0;
+      } else if (line.trim() && !line.startsWith('#')) {
+        cur.durs.push(pendingDur);
+        cur.dirs.push(dirOf(line.trim()));
+        pendingDur = 0;
       }
     }
 
     const segBlocks = blocks.filter((b) => b.durs.length > 0);
     const allDurs = segBlocks.flatMap((b) => b.durs);
-    if (segBlocks.length < 3 || allDurs.length < 20) return m3u8Content;
+    if (segBlocks.length < 2 || allDurs.length < 20) return m3u8Content;
+    const total = allDurs.reduce((x, y) => x + y, 0);
+    const blockDur = (b: Block) => b.durs.reduce((x, y) => x + y, 0);
 
-    // 正片的标准切片时长（众数）
+    // 特征 1：正片目录（按时长占比最多的目录）
+    const dirDur = new Map<string, number>();
+    segBlocks.forEach((b) =>
+      b.dirs.forEach((d, k) => dirDur.set(d, (dirDur.get(d) || 0) + b.durs[k]))
+    );
+    const [mainDir, mainDirDur] = Array.from(dirDur.entries()).sort((x, y) => y[1] - x[1])[0];
+    const dirReliable = mainDirDur / total >= 0.8;
+
+    // 特征 2：正片的标准切片时长（众数），时长统一（≥90%）时才使用
     const counts = new Map<string, number>();
     for (const d of allDurs) {
       const k = d.toFixed(2);
@@ -572,30 +595,34 @@ function PlayPageClient() {
     }
     const [modeKey, modeCount] = Array.from(counts.entries()).sort((x, y) => y[1] - x[1])[0];
     const standard = parseFloat(modeKey);
-    // 切片时长不统一（≥90% 才算统一）的源，无法可靠判断，不处理
-    if (modeCount / allDurs.length < 0.9) return m3u8Content;
+    const durReliable = modeCount / allDurs.length >= 0.9;
 
-    const total = allDurs.reduce((x, y) => x + y, 0);
-    const isAd = blocks.map((b) => {
-      if (b.durs.length === 0) return false;
-      const dur = b.durs.reduce((x, y) => x + y, 0);
-      const odd = b.durs.some((d) => Math.abs(d - standard) > 0.05);
-      return odd && dur < 60;
-    });
-    // 最后一段如果前一段是正片，视为正片自然结尾（最后一个切片通常本来就不完整），保留
+    const byDir = blocks.map(
+      (b) =>
+        dirReliable &&
+        b.durs.length > 0 &&
+        b.dirs.every((d) => d !== mainDir) &&
+        blockDur(b) < 120
+    );
+    const byDur = blocks.map(
+      (b) =>
+        durReliable &&
+        b.durs.length > 0 &&
+        b.durs.some((d) => Math.abs(d - standard) > 0.05) &&
+        blockDur(b) < 60
+    );
+    // 最后一段仅因"规格不同"被判定时，如果前一段是正片，视为正片自然结尾（最后一个切片通常不完整），保留
     const lastIdx = blocks.map((b) => b.durs.length > 0).lastIndexOf(true);
-    if (lastIdx >= 0 && isAd[lastIdx]) {
+    if (lastIdx >= 0 && byDur[lastIdx] && !byDir[lastIdx]) {
       let prev = lastIdx - 1;
       while (prev >= 0 && blocks[prev].durs.length === 0) prev--;
-      if (prev >= 0 && !isAd[prev]) isAd[lastIdx] = false;
+      if (prev >= 0 && !byDir[prev] && !byDur[prev]) byDur[lastIdx] = false;
     }
+    const isAd = blocks.map((_, i) => byDir[i] || byDur[i]);
 
-    const removed = blocks.reduce(
-      (sum, b, i) => (isAd[i] ? sum + b.durs.reduce((x, y) => x + y, 0) : sum),
-      0
-    );
-    // 删除过多（超过 3 分钟或总时长 10%）说明规则不适用这个源，放弃过滤
-    if (removed === 0 || removed > 180 || removed > total * 0.1) return m3u8Content;
+    const removed = blocks.reduce((sum, b, i) => (isAd[i] ? sum + blockDur(b) : sum), 0);
+    // 删除过多说明规则不适用这个源，放弃过滤
+    if (removed === 0 || removed > 300 || removed > total * 0.1) return m3u8Content;
 
     const out: string[] = [...header];
     let carried: string[] = [];
