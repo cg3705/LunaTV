@@ -201,6 +201,8 @@ function PlayPageClient() {
   const lastSaveTimeRef = useRef<number>(0);
 
   const artPlayerRef = useRef<any>(null);
+  // 自动连播时保持全屏：记录用户是否处于全屏（含 iOS 原生全屏、网页全屏）
+  const keepFullscreenRef = useRef(false);
   const artRef = useRef<HTMLDivElement | null>(null);
 
   // Wake Lock 相关
@@ -475,6 +477,24 @@ function PlayPageClient() {
   };
 
   // 清理播放器资源的统一函数
+  const isPlayerFullscreen = () => {
+    const a = artPlayerRef.current;
+    if (!a) return false;
+    const v = a.video as any;
+    return !!(a.fullscreen || a.fullscreenWeb || v?.webkitDisplayingFullscreen);
+  };
+
+  // 切集后恢复全屏。浏览器不允许无用户操作时进入真全屏，所以用网页全屏（铺满屏幕）代替
+  const restoreFullscreen = () => {
+    const a = artPlayerRef.current;
+    if (!a || !keepFullscreenRef.current || isPlayerFullscreen()) return;
+    try {
+      a.fullscreenWeb = true;
+    } catch (e) {
+      console.warn('恢复网页全屏失败:', e);
+    }
+  };
+
   const cleanupPlayer = () => {
     if (artPlayerRef.current) {
       try {
@@ -1263,9 +1283,17 @@ function PlayPageClient() {
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
 
-    // 非WebKit浏览器且播放器已存在，使用switch方法切换
-    if (!isWebkit && artPlayerRef.current) {
+    // 切集前记下是否处于全屏（销毁旧播放器时会触发退出全屏事件，所以要提前记录）
+    const wantFullscreen = keepFullscreenRef.current || isPlayerFullscreen();
+
+    // 非WebKit浏览器且播放器已存在，使用switch方法切换；
+    // WebKit（Safari）在全屏时也复用播放器，避免销毁重建导致退出全屏
+    if ((!isWebkit || wantFullscreen) && artPlayerRef.current) {
       artPlayerRef.current.switch = videoUrl;
+      if (wantFullscreen) {
+        keepFullscreenRef.current = true;
+        setTimeout(restoreFullscreen, 800);
+      }
       artPlayerRef.current.title = `${videoTitle} - 第${currentEpisodeIndex + 1
         }集`;
       artPlayerRef.current.poster = videoCover;
@@ -1289,6 +1317,7 @@ function PlayPageClient() {
       Artplayer.USE_RAF = false;
       Artplayer.FULLSCREEN_WEB_IN_BODY = true;
 
+      keepFullscreenRef.current = wantFullscreen;
       artPlayerRef.current = new Artplayer({
         container: artRef.current,
         url: videoUrl,
@@ -1495,12 +1524,35 @@ function PlayPageClient() {
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
         setError(null);
+        restoreFullscreen();
 
         // 播放器就绪后，如果正在播放则请求 Wake Lock
         if (artPlayerRef.current && !artPlayerRef.current.paused) {
           requestWakeLock();
         }
       });
+
+      // 跟踪全屏状态，用于自动连播时保持全屏
+      artPlayerRef.current.on('fullscreen', (state: boolean) => {
+        keepFullscreenRef.current =
+          state || !!artPlayerRef.current?.fullscreenWeb;
+      });
+      artPlayerRef.current.on('fullscreenWeb', (state: boolean) => {
+        keepFullscreenRef.current = state || !!artPlayerRef.current?.fullscreen;
+      });
+      {
+        const vEl = artPlayerRef.current.video as HTMLVideoElement;
+        vEl.addEventListener('webkitbeginfullscreen', () => {
+          keepFullscreenRef.current = true;
+        });
+        vEl.addEventListener('webkitendfullscreen', () => {
+          // iOS 在一集播完时会自动退出原生全屏，这种情况保留"全屏意图"
+          const nearEnd =
+            vEl.ended ||
+            (vEl.duration > 0 && vEl.currentTime >= vEl.duration - 1);
+          if (!nearEnd) keepFullscreenRef.current = false;
+        });
+      }
 
       // 监听播放状态变化，控制 Wake Lock
       artPlayerRef.current.on('play', () => {
