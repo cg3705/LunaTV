@@ -624,27 +624,46 @@ function PlayPageClient() {
     // 删除过多说明规则不适用这个源，放弃过滤
     if (removed === 0 || removed > 300 || removed > total * 0.1) return m3u8Content;
 
+    // 分段是否来自正片的视频文件
+    const isMainBlock = (b: Block) =>
+      b.durs.length > 0 && (!dirReliable || b.dirs.every((d) => d === mainDir));
+
     const out: string[] = [...header];
     let carried: string[] = [];
+    let removedSinceLastKept = false;
+    let lastKept: Block | null = null;
     blocks.forEach((b, i) => {
       if (isAd[i]) {
         // 删除广告段时保留其中的加密 / 初始化信息，供后面的正片使用
         carried = carried.concat(
           b.lines.filter((l) => l.startsWith('#EXT-X-KEY') || l.startsWith('#EXT-X-MAP'))
         );
+        removedSinceLastKept = true;
         return;
       }
+      let blockLines = b.lines;
+      const startsWithDisc = !!blockLines[0]?.startsWith('#EXT-X-DISCONTINUITY');
+      // 删掉广告后，前后两段如果都来自正片的同一个视频文件，中间的分隔标记是插广告时才加的，
+      // 已经多余；保留它会让播放器重新初始化解码器，造成卡顿，所以一并去掉
+      const dropDisc =
+        startsWithDisc &&
+        removedSinceLastKept &&
+        lastKept !== null &&
+        isMainBlock(lastKept) &&
+        isMainBlock(b);
+      if (dropDisc) blockLines = blockLines.slice(1);
       if (carried.length) {
-        const [first, ...rest] = b.lines;
-        if (first && first.startsWith('#EXT-X-DISCONTINUITY')) {
-          out.push(first, ...carried, ...rest);
+        if (!dropDisc && startsWithDisc) {
+          out.push(blockLines[0], ...carried, ...blockLines.slice(1));
         } else {
-          out.push(...carried, ...b.lines);
+          out.push(...carried, ...blockLines);
         }
         carried = [];
       } else {
-        out.push(...b.lines);
+        out.push(...blockLines);
       }
+      lastKept = b;
+      removedSinceLastKept = false;
     });
     out.push(...footer);
     console.log(`去广告：删除 ${Math.round(removed)} 秒广告分段`);
