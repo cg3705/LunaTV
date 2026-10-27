@@ -516,23 +516,112 @@ function PlayPageClient() {
   };
 
   // 去广告相关函数
+  /**
+   * 去除 m3u8 中拼接的广告分段。
+   * 原理：采集站把广告视频用 #EXT-X-DISCONTINUITY 拼进正片。正片的切片时长高度统一，
+   * 广告是另外编码的，会出现"不合规格"的切片（例如结尾残片、不同的时长）。
+   * 规则：某个分段里含有不合规格的切片、且该分段很短（< 60 秒）时，判定为广告并整段删除。
+   * 保险：切片时长不统一的源不处理；删除总量过大时放弃过滤，原样返回。
+   */
   function filterAdsFromM3U8(m3u8Content: string): string {
-    if (!m3u8Content) return '';
+    if (!m3u8Content || !m3u8Content.includes('#EXTINF')) return m3u8Content;
 
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
+    const lines = m3u8Content.split(/\r?\n/);
+    const header: string[] = [];
+    const footer: string[] = [];
+    type Block = { lines: string[]; durs: number[] };
+    const blocks: Block[] = [];
+    let cur: Block | null = null;
+    let seenSegment = false;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // 只过滤#EXT-X-DISCONTINUITY标识
-      if (!line.includes('#EXT-X-DISCONTINUITY')) {
-        filteredLines.push(line);
+    for (const line of lines) {
+      if (line.startsWith('#EXT-X-ENDLIST')) {
+        footer.push(line);
+        continue;
+      }
+      if (line.startsWith('#EXT-X-DISCONTINUITY')) {
+        cur = { lines: [line], durs: [] };
+        blocks.push(cur);
+        seenSegment = true;
+        continue;
+      }
+      if (!seenSegment && !line.startsWith('#EXTINF') && !line.startsWith('#EXT-X-KEY') && !line.startsWith('#EXT-X-MAP')) {
+        header.push(line);
+        continue;
+      }
+      seenSegment = true;
+      if (!cur) {
+        cur = { lines: [], durs: [] };
+        blocks.push(cur);
+      }
+      cur.lines.push(line);
+      if (line.startsWith('#EXTINF:')) {
+        cur.durs.push(parseFloat(line.slice(8)) || 0);
       }
     }
 
-    return filteredLines.join('\n');
+    const segBlocks = blocks.filter((b) => b.durs.length > 0);
+    const allDurs = segBlocks.flatMap((b) => b.durs);
+    if (segBlocks.length < 3 || allDurs.length < 20) return m3u8Content;
+
+    // 正片的标准切片时长（众数）
+    const counts = new Map<string, number>();
+    for (const d of allDurs) {
+      const k = d.toFixed(2);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    const [modeKey, modeCount] = Array.from(counts.entries()).sort((x, y) => y[1] - x[1])[0];
+    const standard = parseFloat(modeKey);
+    // 切片时长不统一（≥90% 才算统一）的源，无法可靠判断，不处理
+    if (modeCount / allDurs.length < 0.9) return m3u8Content;
+
+    const total = allDurs.reduce((x, y) => x + y, 0);
+    const isAd = blocks.map((b) => {
+      if (b.durs.length === 0) return false;
+      const dur = b.durs.reduce((x, y) => x + y, 0);
+      const odd = b.durs.some((d) => Math.abs(d - standard) > 0.05);
+      return odd && dur < 60;
+    });
+    // 最后一段如果前一段是正片，视为正片自然结尾（最后一个切片通常本来就不完整），保留
+    const lastIdx = blocks.map((b) => b.durs.length > 0).lastIndexOf(true);
+    if (lastIdx >= 0 && isAd[lastIdx]) {
+      let prev = lastIdx - 1;
+      while (prev >= 0 && blocks[prev].durs.length === 0) prev--;
+      if (prev >= 0 && !isAd[prev]) isAd[lastIdx] = false;
+    }
+
+    const removed = blocks.reduce(
+      (sum, b, i) => (isAd[i] ? sum + b.durs.reduce((x, y) => x + y, 0) : sum),
+      0
+    );
+    // 删除过多（超过 3 分钟或总时长 10%）说明规则不适用这个源，放弃过滤
+    if (removed === 0 || removed > 180 || removed > total * 0.1) return m3u8Content;
+
+    const out: string[] = [...header];
+    let carried: string[] = [];
+    blocks.forEach((b, i) => {
+      if (isAd[i]) {
+        // 删除广告段时保留其中的加密 / 初始化信息，供后面的正片使用
+        carried = carried.concat(
+          b.lines.filter((l) => l.startsWith('#EXT-X-KEY') || l.startsWith('#EXT-X-MAP'))
+        );
+        return;
+      }
+      if (carried.length) {
+        const [first, ...rest] = b.lines;
+        if (first && first.startsWith('#EXT-X-DISCONTINUITY')) {
+          out.push(first, ...carried, ...rest);
+        } else {
+          out.push(...carried, ...b.lines);
+        }
+        carried = [];
+      } else {
+        out.push(...b.lines);
+      }
+    });
+    out.push(...footer);
+    console.log(`去广告：删除 ${Math.round(removed)} 秒广告分段`);
+    return out.join('\n');
   }
 
   // 跳过片头片尾配置相关函数
