@@ -521,6 +521,7 @@ function PlayPageClient() {
    * 采集站把广告视频用 #EXT-X-DISCONTINUITY 拼进正片，有两种可识别的特征：
    * 1. 来源不同：广告切片来自另一个目录/服务器（另一个视频文件），正片切片几乎都来自同一个目录；
    * 2. 规格不同：正片切片时长高度统一时，广告是另外编码的，会出现不合规格的切片。
+   * 3. 已知指纹：资源站会反复使用同一批广告视频，分段的切片时长组合与已知广告完全一致的直接删除。
    * 满足任一特征、且分段很短的，判定为广告并整段删除。
    * 保险：删除总量过大（超过 5 分钟或总时长 10%）时放弃过滤，原样返回。
    */
@@ -618,7 +619,27 @@ function PlayPageClient() {
       while (prev >= 0 && blocks[prev].durs.length === 0) prev--;
       if (prev >= 0 && !byDir[prev] && !byDur[prev]) byDur[lastIdx] = false;
     }
-    const isAd = blocks.map((_, i) => byDir[i] || byDur[i]);
+    // 特征 3：已知广告指纹（分段内各切片时长，保留两位小数，用逗号连接）。
+    // 发现新的广告后把它的指纹加到这里，所有剧集都会受益
+    const KNOWN_AD_SIGNATURES = new Set([
+      '4.00,5.48,2.68', // 如意资源：片尾广告（《逃避虽可耻但有用》《美人余》）
+      '4.00,5.00,4.00,4.24,2.76', // 如意资源：葡京娱乐场
+      '4.00,4.00,4.00,4.00,4.00,2.00', // 如意资源：澳门新葡京
+    ]);
+    const signature = (b: Block) => b.durs.map((d) => d.toFixed(2)).join(',');
+    const byFingerprint = blocks.map(
+      (b) => b.durs.length > 0 && KNOWN_AD_SIGNATURES.has(signature(b))
+    );
+
+    const isAd = blocks.map((_, i) => byDir[i] || byDur[i] || byFingerprint[i]);
+    // 夹在两段广告之间、不到 3 秒的碎片，也是广告的一部分
+    const segIdx = blocks.map((b, i) => (b.durs.length > 0 ? i : -1)).filter((i) => i >= 0);
+    segIdx.forEach((idx, k) => {
+      if (k === 0 || k === segIdx.length - 1 || isAd[idx]) return;
+      if (isAd[segIdx[k - 1]] && isAd[segIdx[k + 1]] && blockDur(blocks[idx]) < 3) {
+        isAd[idx] = true;
+      }
+    });
 
     const removed = blocks.reduce((sum, b, i) => (isAd[i] ? sum + blockDur(b) : sum), 0);
     // 删除过多说明规则不适用这个源，放弃过滤
