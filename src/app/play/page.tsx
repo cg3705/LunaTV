@@ -841,11 +841,24 @@ function PlayPageClient() {
         }
         const data = await response.json();
 
+        // 片名归一化：去空格、转小写；部分源会在片名末尾加上年份（如"美人余2026""美人余(2026)"），
+        // 末尾 4 位数字等于该片年份时去掉，避免同一部剧因片名写法不同而无法换源
+        const normalizeTitle = (title: string, year?: string) => {
+          const t = (title || '').replace(/\s+/g, '').toLowerCase();
+          if (!year) return t;
+          return t.replace(/[（(【[]?(\d{4})[）)】\]]?$/, (m, y) =>
+            y === String(year).trim() && t.length > m.length ? '' : m
+          );
+        };
+        const targetTitle = normalizeTitle(
+          videoTitleRef.current,
+          videoYearRef.current
+        );
+
         // 处理搜索结果，根据规则过滤
         const results = data.results.filter(
           (result: SearchResult) =>
-            result.title.replaceAll(' ', '').toLowerCase() ===
-            videoTitleRef.current.replaceAll(' ', '').toLowerCase() &&
+            normalizeTitle(result.title, result.year) === targetTitle &&
             (videoYearRef.current
               ? result.year.toLowerCase() === videoYearRef.current.toLowerCase()
               : true) &&
