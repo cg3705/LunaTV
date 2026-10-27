@@ -203,6 +203,11 @@ function PlayPageClient() {
   const artPlayerRef = useRef<any>(null);
   // 自动连播时保持全屏：记录用户是否处于全屏（含 iOS 原生全屏、网页全屏）
   const keepFullscreenRef = useRef(false);
+  // 定时暂停（睡眠定时）：0 = 关闭，>0 = 分钟数，-1 = 播完本集
+  const sleepModeRef = useRef<number>(0);
+  const sleepDeadlineRef = useRef<number>(0);
+  const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sleepWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
 
   // Wake Lock 相关
@@ -492,6 +497,100 @@ function PlayPageClient() {
       a.fullscreenWeb = true;
     } catch (e) {
       console.warn('恢复网页全屏失败:', e);
+    }
+  };
+
+  // ---------- 定时暂停 ----------
+  const SLEEP_OPTIONS = [
+    { label: '关闭', value: 0 },
+    { label: '15 分钟', value: 15 },
+    { label: '30 分钟', value: 30 },
+    { label: '45 分钟', value: 45 },
+    { label: '60 分钟', value: 60 },
+    { label: '90 分钟', value: 90 },
+    { label: '播完本集', value: -1 },
+  ];
+
+  const sleepLabel = () => {
+    const v = sleepModeRef.current;
+    if (v === 0) return '关闭';
+    if (v === -1) return '播完本集';
+    const left = Math.max(
+      1,
+      Math.ceil((sleepDeadlineRef.current - Date.now()) / 60000)
+    );
+    return `剩 ${left} 分钟`;
+  };
+
+  const clearSleepTimers = () => {
+    if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+    if (sleepWarnTimerRef.current) clearTimeout(sleepWarnTimerRef.current);
+    sleepTimerRef.current = null;
+    sleepWarnTimerRef.current = null;
+  };
+
+  // 设置菜单里的"定时暂停"选项（新建播放器和状态变化时都用它，保证显示一致）
+  const buildSleepSetting = () => ({
+    name: '定时暂停',
+    html: '定时暂停',
+    icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/></svg>',
+    tooltip: sleepLabel(),
+    selector: SLEEP_OPTIONS.map((o) => ({
+      html: o.label,
+      value: o.value,
+      default: o.value === sleepModeRef.current,
+    })),
+    onSelect: function (item: any) {
+      setSleepTimer(item.value);
+      const a = artPlayerRef.current;
+      if (a) {
+        a.notice.show =
+          item.value === 0
+            ? '已关闭定时暂停'
+            : item.value === -1
+            ? '本集播完后将自动暂停'
+            : `${item.value} 分钟后将自动暂停`;
+      }
+      return sleepLabel();
+    },
+  });
+
+  const refreshSleepSetting = () => {
+    try {
+      artPlayerRef.current?.setting.update(buildSleepSetting());
+    } catch (_) {
+      // ignore
+    }
+  };
+
+  const triggerSleepPause = (message: string) => {
+    clearSleepTimers();
+    sleepModeRef.current = 0;
+    const a = artPlayerRef.current;
+    if (a) {
+      a.pause();
+      a.notice.show = message;
+    }
+    releaseWakeLock();
+    refreshSleepSetting();
+  };
+
+  const setSleepTimer = (value: number) => {
+    clearSleepTimers();
+    sleepModeRef.current = value;
+    if (value > 0) {
+      sleepDeadlineRef.current = Date.now() + value * 60000;
+      sleepTimerRef.current = setTimeout(
+        () => triggerSleepPause('定时结束，已自动暂停'),
+        value * 60000
+      );
+      if (value > 1) {
+        sleepWarnTimerRef.current = setTimeout(() => {
+          if (artPlayerRef.current) {
+            artPlayerRef.current.notice.show = '1 分钟后将自动暂停';
+          }
+        }, (value - 1) * 60000);
+      }
     }
   };
 
@@ -1313,6 +1412,12 @@ function PlayPageClient() {
     }
   };
 
+  // 离开播放页时清理定时暂停的计时器
+  useEffect(() => {
+    return () => clearSleepTimers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     // 页面即将卸载时保存播放进度和清理资源
     const handleBeforeUnload = () => {
@@ -1608,6 +1713,7 @@ function PlayPageClient() {
               return newVal ? '当前开启' : '当前关闭';
             },
           },
+          buildSleepSetting(),
           {
             name: '跳过片头片尾',
             html: '跳过片头片尾',
@@ -1815,7 +1921,10 @@ function PlayPageClient() {
           currentTime >
           artPlayerRef.current.duration + skipConfigRef.current.outro_time
         ) {
-          if (
+          if (sleepModeRef.current === -1) {
+            // 定时暂停选了"播完本集"：跳过片尾后停下，不进入下一集
+            triggerSleepPause('本集已播完，已自动暂停');
+          } else if (
             currentEpisodeIndexRef.current <
             (detailRef.current?.episodes?.length || 1) - 1
           ) {
@@ -1839,6 +1948,12 @@ function PlayPageClient() {
       // 监听视频播放结束事件：释放 Wake Lock 并自动播放下一集
       artPlayerRef.current.on('video:ended', () => {
         releaseWakeLock();
+
+        // 定时暂停选了"播完本集"：停在这里，不自动播放下一集
+        if (sleepModeRef.current === -1) {
+          triggerSleepPause('本集已播完，已自动暂停');
+          return;
+        }
 
         const d = detailRef.current;
         const idx = currentEpisodeIndexRef.current;
