@@ -138,9 +138,19 @@ export const useLongPress = ({
 
 
 
+  // 触摸被系统打断（例如系统手势、页面布局变化）时，重置状态，且不触发点击
+  const onTouchCancel = useCallback(() => {
+    clearTimer();
+    isLongPress.current = false;
+    startPosition.current = null;
+    isActive.current = false;
+    wasButton.current = false;
+  }, [clearTimer]);
+
   return {
     onTouchStart,
     onTouchMove,
     onTouchEnd,
+    onTouchCancel,
   };
 };
