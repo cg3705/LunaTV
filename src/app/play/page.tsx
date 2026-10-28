@@ -208,6 +208,17 @@ function PlayPageClient() {
   const sleepDeadlineRef = useRef<number>(0);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sleepWarnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 弹幕档位：off 关闭 / low 少量 / mid 适中 / full 满屏（按设备记住，默认关闭）
+  const danmakuModeRef = useRef<string>(
+    typeof window === 'undefined'
+      ? 'off'
+      : localStorage.getItem('danmaku_mode') ||
+          (localStorage.getItem('enable_danmaku') === 'true' ? 'low' : 'off')
+  );
+  // 当前这一集的完整弹幕（切换档位时直接重新抽样，不用重新下载）
+  const danmakuCacheRef = useRef<{ key: string; list: any[] } | null>(null);
+  const danmakuLoadSeqRef = useRef(0);
+  const danmakuScriptRef = useRef<Promise<any> | null>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
 
   // Wake Lock 相关
@@ -594,6 +605,200 @@ function PlayPageClient() {
     }
   };
 
+  // ---------- 弹幕 ----------
+  const DANMAKU_PLUGIN_URL =
+    'https://cdn.jsdelivr.net/npm/artplayer-plugin-danmuku@5.1.8/dist/artplayer-plugin-danmuku.js';
+  const isMobileDevice = () =>
+    typeof navigator !== 'undefined' &&
+    /Mobi|iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  // 弹幕插件只在打开弹幕时才从 CDN 加载
+  const loadDanmakuPlugin = (): Promise<any> => {
+    const w = window as any;
+    if (w.artplayerPluginDanmuku) return Promise.resolve(w.artplayerPluginDanmuku);
+    if (!danmakuScriptRef.current) {
+      danmakuScriptRef.current = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = DANMAKU_PLUGIN_URL;
+        script.async = true;
+        script.onload = () =>
+          w.artplayerPluginDanmuku
+            ? resolve(w.artplayerPluginDanmuku)
+            : reject(new Error('弹幕插件加载失败'));
+        script.onerror = () => {
+          danmakuScriptRef.current = null;
+          reject(new Error('弹幕插件加载失败'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+    return danmakuScriptRef.current;
+  };
+
+  const DANMAKU_PRESETS: Record<
+    string,
+    { label: string; bottom: number | `${number}%`; mobile: number; desktop: number }
+  > = {
+    low: { label: '少量（顶部 1/4）', bottom: '75%', mobile: 600, desktop: 1500 },
+    mid: { label: '适中（上半屏）', bottom: '50%', mobile: 1200, desktop: 3000 },
+    full: { label: '满屏', bottom: 10, mobile: 3000, desktop: 8000 },
+  };
+  const DANMAKU_OPTIONS = [
+    { value: 'off', label: '关闭' },
+    { value: 'low', label: DANMAKU_PRESETS.low.label },
+    { value: 'mid', label: DANMAKU_PRESETS.mid.label },
+    { value: 'full', label: DANMAKU_PRESETS.full.label },
+  ];
+  const danmakuLabel = () =>
+    DANMAKU_OPTIONS.find((o) => o.value === danmakuModeRef.current)?.label ||
+    '关闭';
+
+  // 按时间均匀抽样，控制弹幕密度
+  const sampleDanmaku = (list: any[], max: number) => {
+    if (list.length <= max) return list;
+    const step = list.length / max;
+    const sampled: any[] = [];
+    for (let i = 0; i < max; i++) sampled.push(list[Math.floor(i * step)]);
+    return sampled;
+  };
+
+  // 按"剧名 + 第几集"匹配并获取当前这一集的弹幕
+  const fetchDanmakuList = async (): Promise<any[]> => {
+    const year = String(videoYearRef.current || '').trim();
+    let title = (videoTitleRef.current || '').trim();
+    // 去掉部分源加在片名末尾的年份（如"美人余2026"）
+    if (year && title.length > 4) {
+      title = title.replace(new RegExp(`[（(【\\[]?${year}[）)】\\]]?$`), '').trim();
+    }
+    if (!title) return [];
+    const total = detailRef.current?.episodes?.length || 1;
+    const idx = currentEpisodeIndexRef.current;
+    const fileName =
+      total > 1 ? `${title} S01E${String(idx + 1).padStart(2, '0')}` : title;
+    if (danmakuCacheRef.current?.key === fileName) {
+      return danmakuCacheRef.current.list;
+    }
+
+    const match = await fetch(
+      `/api/danmu?action=match&fileName=${encodeURIComponent(fileName)}`
+    ).then((r) => r.json());
+    const episodeId = match?.matches?.[0]?.episodeId;
+    if (!episodeId) return [];
+
+    const data = await fetch(`/api/danmu?action=comment&id=${episodeId}`).then(
+      (r) => r.json()
+    );
+    const list = (data?.comments || [])
+      .map((c: any) => {
+        const [t, mode, color] = String(c.p || '').split(',');
+        const m = Number(mode);
+        const colorNum = Number(color);
+        return {
+          text: String(c.m || ''),
+          time: parseFloat(t) || 0,
+          // 弹弹play：1 滚动 / 4 底部 / 5 顶部；插件：0 滚动 / 1 顶部 / 2 底部
+          mode: m === 5 ? 1 : m === 4 ? 2 : 0,
+          color:
+            '#' +
+            (Number.isFinite(colorNum) && colorNum > 0 ? colorNum : 16777215)
+              .toString(16)
+              .padStart(6, '0'),
+        };
+      })
+      .filter((d: any) => d.text)
+      .sort((a: any, b: any) => a.time - b.time);
+    danmakuCacheRef.current = { key: fileName, list };
+    return list;
+  };
+
+  // 给当前播放器加载 / 刷新弹幕（切集、换源、新建播放器后都调用）
+  const applyDanmaku = async () => {
+    const art = artPlayerRef.current;
+    if (!art) return;
+    const seq = ++danmakuLoadSeqRef.current;
+    const mode = danmakuModeRef.current;
+    const preset = DANMAKU_PRESETS[mode];
+    if (!preset) {
+      art.plugins?.artplayerPluginDanmuku?.hide();
+      return;
+    }
+    try {
+      const [plugin, fullList] = await Promise.all([
+        loadDanmakuPlugin(),
+        fetchDanmakuList(),
+      ]);
+      // 期间切了集或改了档位，就丢弃这次结果
+      if (
+        seq !== danmakuLoadSeqRef.current ||
+        artPlayerRef.current !== art ||
+        danmakuModeRef.current !== mode
+      ) {
+        return;
+      }
+      const list = sampleDanmaku(
+        fullList,
+        isMobileDevice() ? preset.mobile : preset.desktop
+      );
+      const options = {
+        speed: 7,
+        opacity: 0.75,
+        fontSize: isMobileDevice() ? 16 : 22,
+        // 上边距 10px，下边距决定弹幕只显示在画面上方多大的区域
+        margin: [10, preset.bottom] as [number, number | `${number}%`],
+        antiOverlap: true,
+        synchronousPlayback: true,
+        emitter: false,
+        heatmap: false,
+      };
+      const existing = art.plugins?.artplayerPluginDanmuku;
+      if (existing) {
+        existing.config({ ...options, danmuku: list });
+        await existing.load(list);
+        existing.show();
+      } else {
+        art.plugins.add(plugin({ ...options, danmuku: list }));
+      }
+      art.notice.show = list.length
+        ? `已加载 ${list.length} 条弹幕`
+        : '没有找到这一集的弹幕';
+    } catch (e) {
+      console.warn('弹幕加载失败:', e);
+      if (seq === danmakuLoadSeqRef.current && artPlayerRef.current === art) {
+        art.notice.show = '弹幕加载失败';
+      }
+    }
+  };
+
+  const buildDanmakuSetting = () => ({
+    name: '弹幕',
+    html: '弹幕',
+    tooltip: danmakuLabel(),
+    selector: DANMAKU_OPTIONS.map((o) => ({
+      html: o.label,
+      value: o.value,
+      default: o.value === danmakuModeRef.current,
+    })),
+    onSelect: function (item: any) {
+      danmakuModeRef.current = item.value;
+      try {
+        localStorage.setItem('danmaku_mode', item.value);
+      } catch (_) {
+        // ignore
+      }
+      const a = artPlayerRef.current;
+      if (item.value === 'off') {
+        danmakuLoadSeqRef.current++;
+        a?.plugins?.artplayerPluginDanmuku?.hide();
+        if (a) a.notice.show = '已关闭弹幕';
+      } else {
+        if (a) a.notice.show = '正在加载弹幕…';
+        applyDanmaku();
+      }
+      return item.html;
+    },
+    icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/><path d="M7 9h6M7 12h9" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>',
+  });
+
   const cleanupPlayer = () => {
     if (artPlayerRef.current) {
       try {
@@ -687,10 +892,11 @@ function PlayPageClient() {
     const [mainDir, mainDirDur] = Array.from(dirDur.entries()).sort((x, y) => y[1] - x[1])[0];
     const dirReliable = mainDirDur / total >= 0.8;
 
-    // 特征 2：正片的标准切片时长（众数），时长统一（≥90%）时才使用
+    // 特征 2：正片的标准切片时长（众数），时长统一（≥90%）时才使用。
+    // 精确到 3 位小数：例如正片 4.004 秒（29.97 帧）而广告 4.000 秒（25 帧），两位小数会认不出来
     const counts = new Map<string, number>();
     for (const d of allDurs) {
-      const k = d.toFixed(2);
+      const k = d.toFixed(3);
       counts.set(k, (counts.get(k) || 0) + 1);
     }
     const [modeKey, modeCount] = Array.from(counts.entries()).sort((x, y) => y[1] - x[1])[0];
@@ -708,7 +914,7 @@ function PlayPageClient() {
       (b) =>
         durReliable &&
         b.durs.length > 0 &&
-        b.durs.some((d) => Math.abs(d - standard) > 0.05) &&
+        b.durs.some((d) => Math.abs(d - standard) > 0.002) &&
         blockDur(b) < 60
     );
     // 最后一段仅因"规格不同"被判定时，如果前一段是正片，视为正片自然结尾（最后一个切片通常不完整），保留
@@ -1565,6 +1771,8 @@ function PlayPageClient() {
     // WebKit（Safari）在全屏时也复用播放器，避免销毁重建导致退出全屏
     if ((!isWebkit || wantFullscreen) && artPlayerRef.current) {
       artPlayerRef.current.switch = videoUrl;
+      // 切集后刷新弹幕
+      if (danmakuModeRef.current !== 'off') setTimeout(applyDanmaku, 500);
       if (wantFullscreen) {
         keepFullscreenRef.current = true;
         setTimeout(restoreFullscreen, 800);
@@ -1714,6 +1922,7 @@ function PlayPageClient() {
             },
           },
           buildSleepSetting(),
+          buildDanmakuSetting(),
           {
             name: '跳过片头片尾',
             html: '跳过片头片尾',
@@ -1799,6 +2008,7 @@ function PlayPageClient() {
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
+        if (danmakuModeRef.current !== 'off') applyDanmaku();
         setError(null);
         restoreFullscreen();
 
