@@ -1,6 +1,20 @@
 import { Radio, X } from 'lucide-react';
 import Image from 'next/image';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+
+// 全局记录当前屏幕上有几根手指（用于判断菜单弹出时手指是否还按着）
+let activeTouchCount = 0;
+if (typeof window !== 'undefined') {
+  const syncTouches = (e: TouchEvent) => {
+    activeTouchCount = e.touches.length;
+  };
+  window.addEventListener('touchstart', syncTouches, { capture: true, passive: true });
+  window.addEventListener('touchend', syncTouches, { capture: true, passive: true });
+  window.addEventListener('touchcancel', syncTouches, { capture: true, passive: true });
+}
+
+// 菜单弹出后，至少等这么久才允许点击（挡住松手时浏览器补发的"幽灵点击"）
+const ARM_DELAY_MS = 300;
 
 interface ActionItem {
   id: string;
@@ -40,6 +54,42 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+  // 是否已允许点击：长按弹出菜单时手指还在屏幕上，松手瞬间浏览器会在手指位置补发一次点击，
+  // 那个位置此时是菜单的遮罩或按钮，会导致菜单"秒关"甚至误触操作。
+  // 所以要等手指真正松开、再过一小段时间，才接受点击。
+  const armedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      armedRef.current = false;
+      return;
+    }
+    armedRef.current = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const arm = () => {
+      timer = setTimeout(() => {
+        armedRef.current = true;
+      }, ARM_DELAY_MS);
+    };
+    const onRelease = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        window.removeEventListener('touchend', onRelease, true);
+        window.removeEventListener('touchcancel', onRelease, true);
+        arm();
+      }
+    };
+    if (activeTouchCount > 0) {
+      window.addEventListener('touchend', onRelease, true);
+      window.addEventListener('touchcancel', onRelease, true);
+    } else {
+      arm();
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('touchend', onRelease, true);
+      window.removeEventListener('touchcancel', onRelease, true);
+    };
+  }, [isOpen]);
 
   // 控制动画状态
   useEffect(() => {
@@ -163,6 +213,13 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-end justify-center"
+      onClickCapture={(e) => {
+        // 还没"解锁"时吞掉所有点击（包括遮罩、关闭按钮和操作项），防止幽灵点击
+        if (!armedRef.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       onTouchMove={(e) => {
         // 阻止最外层容器的触摸移动，防止背景滚动
         e.preventDefault();
