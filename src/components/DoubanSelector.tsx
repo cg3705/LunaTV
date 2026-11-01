@@ -87,6 +87,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   const showPrimaryOptions: SelectorOption[] = [
     { label: '全部', value: '全部' },
     { label: '最近热门', value: '最近热门' },
+    { label: '最新综艺', value: '最新综艺' },
   ];
 
   // 综艺二级选择器选项
