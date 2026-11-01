@@ -223,12 +223,20 @@ interface DoubanListParams {
   type: string;
   pageLimit?: number;
   pageStart?: number;
+  /** recommend：按热度（默认）；time：按时间，新的在前 */
+  sort?: 'recommend' | 'time';
 }
 
 export async function getDoubanList(
   params: DoubanListParams
 ): Promise<DoubanResult> {
-  const { tag, type, pageLimit = 20, pageStart = 0 } = params;
+  const {
+    tag,
+    type,
+    pageLimit = 20,
+    pageStart = 0,
+    sort = 'recommend',
+  } = params;
   const { proxyType, proxyUrl } = getDoubanProxyConfig();
   switch (proxyType) {
     case 'cors-proxy-zwei':
@@ -244,7 +252,7 @@ export async function getDoubanList(
     case 'direct':
     default:
       const response = await fetch(
-        `/api/douban?tag=${tag}&type=${type}&pageSize=${pageLimit}&pageStart=${pageStart}`
+        `/api/douban?tag=${tag}&type=${type}&pageSize=${pageLimit}&pageStart=${pageStart}&sort=${sort}`
       );
 
       return response.json();
@@ -257,7 +265,13 @@ export async function fetchDoubanList(
   useTencentCDN = false,
   useAliCDN = false
 ): Promise<DoubanResult> {
-  const { tag, type, pageLimit = 20, pageStart = 0 } = params;
+  const {
+    tag,
+    type,
+    pageLimit = 20,
+    pageStart = 0,
+    sort = 'recommend',
+  } = params;
 
   // 验证参数
   if (!tag || !type) {
@@ -277,10 +291,10 @@ export async function fetchDoubanList(
   }
 
   const target = useTencentCDN
-    ? `https://movie.douban.cmliussss.net/j/search_subjects?type=${type}&tag=${tag}&sort=recommend&page_limit=${pageLimit}&page_start=${pageStart}`
+    ? `https://movie.douban.cmliussss.net/j/search_subjects?type=${type}&tag=${tag}&sort=${sort}&page_limit=${pageLimit}&page_start=${pageStart}`
     : useAliCDN
-      ? `https://movie.douban.cmliussss.com/j/search_subjects?type=${type}&tag=${tag}&sort=recommend&page_limit=${pageLimit}&page_start=${pageStart}`
-      : `https://movie.douban.com/j/search_subjects?type=${type}&tag=${tag}&sort=recommend&page_limit=${pageLimit}&page_start=${pageStart}`;
+      ? `https://movie.douban.cmliussss.com/j/search_subjects?type=${type}&tag=${tag}&sort=${sort}&page_limit=${pageLimit}&page_start=${pageStart}`
+      : `https://movie.douban.com/j/search_subjects?type=${type}&tag=${tag}&sort=${sort}&page_limit=${pageLimit}&page_start=${pageStart}`;
 
   try {
     const response = await fetchWithTimeout(
