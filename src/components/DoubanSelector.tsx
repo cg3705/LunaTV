@@ -68,6 +68,7 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
   const tvPrimaryOptions: SelectorOption[] = [
     { label: '全部', value: '全部' },
     { label: '最近热门', value: '最近热门' },
+    { label: '最新剧集', value: '最新剧集' },
   ];
 
   // 电视剧二级选择器选项
@@ -424,7 +425,9 @@ const DoubanSelector: React.FC<DoubanSelectorProps> = ({
           </div>
 
           {/* 二级选择器 - 只在选中"最近热门"时显示，选中"全部"时显示多级选择器 */}
-          {(primarySelection || tvPrimaryOptions[1].value) === '最近热门' ? (
+          {['最近热门', '最新剧集'].includes(
+            primarySelection || tvPrimaryOptions[1].value
+          ) ? (
             <div className='flex flex-col sm:flex-row sm:items-center gap-2'>
               <span className='text-xs sm:text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[48px]'>
                 类型
