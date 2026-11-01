@@ -72,12 +72,11 @@ async function fetchWithTimeout(
         ? `${proxyUrl}${encodeURIComponent(url)}`
         : url;
 
+  // 只带 Accept（CORS 安全头）。浏览器里设置 User-Agent / Referer 本来就不起作用，
+  // 但在 iOS Safari 上会触发 CORS 预检，而 movie.douban 镜像不响应预检，导致请求失败
   const fetchOptions: RequestInit = {
     signal: controller.signal,
     headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      Referer: 'https://movie.douban.com/',
       Accept: 'application/json, text/plain, */*',
     },
   };
