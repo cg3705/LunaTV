@@ -21,6 +21,23 @@ import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
+// "港剧"快捷分类：豆瓣"最近热门"本身没有港剧这一项，
+// 改用推荐接口按 地区=中国香港、近期热度 排序取数据（与"全部"里手动筛选效果一致）
+const HK_TV_TYPE = 'tv_hongkong';
+const getHongKongTv = (pageStart: number) =>
+  getDoubanRecommends({
+    kind: 'tv',
+    pageLimit: 25,
+    pageStart,
+    category: '',
+    format: '电视剧',
+    region: '中国香港',
+    year: '',
+    platform: '',
+    sort: 'U',
+    label: '',
+  });
+
 function DoubanPageClient() {
   const searchParams = useSearchParams();
   const [doubanData, setDoubanData] = useState<DoubanItem[]>([]);
@@ -351,6 +368,8 @@ function DoubanPageClient() {
             ? (multiLevelValues.label as string)
             : '',
         });
+      } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
+        data = await getHongKongTv(0);
       } else {
         data = await getDoubanCategories(getRequestParams(0));
       }
@@ -509,6 +528,8 @@ function DoubanPageClient() {
                 ? (multiLevelValues.label as string)
                 : '',
             });
+          } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
+            data = await getHongKongTv(currentPage * 25);
           } else {
             data = await getDoubanCategories(
               getRequestParams(currentPage * 25)
