@@ -21,21 +21,30 @@ import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 import VirtualGrid from '@/components/VirtualGrid';
 
-// "港剧"快捷分类：豆瓣"最近热门"本身没有港剧这一项，
-// 改用推荐接口按 地区=中国香港、近期热度 排序取数据（与"全部"里手动筛选效果一致）
+// 电视剧"港剧"分类和"最新剧集"：使用豆瓣"选电视剧"的标签列表（只收录豆瓣整理过的剧，
+// 不会混入网络短剧）。"最近热门"里的港剧按热度，"最新剧集"按时间（新的在前）
 const HK_TV_TYPE = 'tv_hongkong';
-const getHongKongTv = (pageStart: number) =>
-  getDoubanRecommends({
-    kind: 'tv',
+const TV_TAGS: Record<string, string> = {
+  tv: '热门',
+  tv_domestic: '国产剧',
+  tv_american: '美剧',
+  tv_japanese: '日剧',
+  tv_korean: '韩剧',
+  tv_hongkong: '港剧',
+  tv_animation: '日本动画',
+  tv_documentary: '纪录片',
+};
+const getTvByTag = (
+  secondary: string,
+  sort: 'recommend' | 'time',
+  pageStart: number
+) =>
+  getDoubanList({
+    tag: TV_TAGS[secondary] || '热门',
+    type: 'tv',
+    sort,
     pageLimit: 25,
     pageStart,
-    category: '',
-    format: '电视剧',
-    region: '中国香港',
-    year: '',
-    platform: '',
-    sort: 'U',
-    label: '',
   });
 
 function DoubanPageClient() {
@@ -368,8 +377,10 @@ function DoubanPageClient() {
             ? (multiLevelValues.label as string)
             : '',
         });
+      } else if (type === 'tv' && primarySelection === '最新剧集') {
+        data = await getTvByTag(secondarySelection, 'time', 0);
       } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
-        data = await getHongKongTv(0);
+        data = await getTvByTag(HK_TV_TYPE, 'recommend', 0);
       } else {
         data = await getDoubanCategories(getRequestParams(0));
       }
@@ -528,8 +539,18 @@ function DoubanPageClient() {
                 ? (multiLevelValues.label as string)
                 : '',
             });
+          } else if (type === 'tv' && primarySelection === '最新剧集') {
+            data = await getTvByTag(
+              secondarySelection,
+              'time',
+              currentPage * 25
+            );
           } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
-            data = await getHongKongTv(currentPage * 25);
+            data = await getTvByTag(
+              HK_TV_TYPE,
+              'recommend',
+              currentPage * 25
+            );
           } else {
             data = await getDoubanCategories(
               getRequestParams(currentPage * 25)
@@ -636,7 +657,10 @@ function DoubanPageClient() {
           }
         } else {
           // 电视剧和综艺切换到"最近热门"时，重置二级分类为第一个选项
-          if ((type === 'tv' || type === 'show') && value === '最近热门') {
+          if (
+            (type === 'tv' || type === 'show') &&
+            (value === '最近热门' || value === '最新剧集')
+          ) {
             setPrimarySelection(value);
             if (type === 'tv') {
               setSecondarySelection('tv');
