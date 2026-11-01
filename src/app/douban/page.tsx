@@ -46,6 +46,15 @@ const getTvByTag = (
     pageLimit: 25,
     pageStart,
   });
+// "最新综艺"：豆瓣标签只有笼统的"综艺"，不分国内/国外，按时间排序
+const getLatestShows = (pageStart: number) =>
+  getDoubanList({
+    tag: '综艺',
+    type: 'tv',
+    sort: 'time',
+    pageLimit: 25,
+    pageStart,
+  });
 
 function DoubanPageClient() {
   const searchParams = useSearchParams();
@@ -379,6 +388,8 @@ function DoubanPageClient() {
         });
       } else if (type === 'tv' && primarySelection === '最新剧集') {
         data = await getTvByTag(secondarySelection, 'time', 0);
+      } else if (type === 'show' && primarySelection === '最新综艺') {
+        data = await getLatestShows(0);
       } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
         data = await getTvByTag(HK_TV_TYPE, 'recommend', 0);
       } else {
@@ -545,6 +556,8 @@ function DoubanPageClient() {
               'time',
               currentPage * 25
             );
+          } else if (type === 'show' && primarySelection === '最新综艺') {
+            data = await getLatestShows(currentPage * 25);
           } else if (type === 'tv' && secondarySelection === HK_TV_TYPE) {
             data = await getTvByTag(
               HK_TV_TYPE,
