@@ -755,7 +755,9 @@ function PlayPageClient() {
       const existing = art.plugins?.artplayerPluginDanmuku;
       if (existing) {
         existing.config({ ...options, danmuku: list });
-        await existing.load(list);
+        // 不带参数：先清空再按 config 里的新列表重新加载。
+        // 带参数的 load(list) 是"追加"，切集/换档位后会让弹幕成倍重复
+        await existing.load();
         existing.show();
       } else {
         art.plugins.add(plugin({ ...options, danmuku: list }));
