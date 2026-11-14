@@ -123,6 +123,7 @@ export function filterAdsFromM3U8(m3u8Content: string): string {
     '4.00,5.24,4.72,4.00,3.04', // 如意资源：澳门新葡京（独家赞助）
     '4.87,3.33,5.60,2.87,2.97', // 非凡影视：澳门新葡京（《交换生活的我们》各集 5:58）
     '6.03,3.33,5.77,2.23', // 非凡影视：《交换生活的我们》各集 28:18
+    '4.00,4.00,4.00,4.00,3.00', // 如意资源：游戏多多（《鉴定》第 20 集 9:21、第 35 集 10:42）
   ]);
   const signature = (b: Block) => b.durs.map((d) => d.toFixed(2)).join(',');
   const byFingerprint = blocks.map(
