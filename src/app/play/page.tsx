@@ -24,10 +24,13 @@ import {
 import { filterAdsFromM3U8 } from '@/lib/m3u8AdFilter';
 import {
   downloadEpisode,
+  DownloadOption,
+  formatBytes,
   getOfflineVideo,
   isDownloading,
   offlineId,
   pauseDownload,
+  probeDownloadOptions,
 } from '@/lib/offline';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
@@ -1537,7 +1540,14 @@ function PlayPageClient() {
   const [offlineState, setOfflineState] = useState<{
     status: 'none' | 'downloading' | 'paused' | 'done' | 'error';
     pct: number;
+    speed?: number;
   }>({ status: 'none', pct: 0 });
+  // 下载前选择清晰度的弹窗
+  const [downloadDialog, setDownloadDialog] = useState<{
+    loading: boolean;
+    options: DownloadOption[];
+    error?: string;
+  } | null>(null);
   const offlineTargetRef = useRef('');
 
   useEffect(() => {
@@ -1581,6 +1591,30 @@ function PlayPageClient() {
       router.push('/offline');
       return;
     }
+    // 继续下载沿用上次选的清晰度；新下载先分析清晰度和大小让用户选
+    if (offlineState.status === 'paused' || offlineState.status === 'error') {
+      startDownload();
+      return;
+    }
+    setDownloadDialog({ loading: true, options: [] });
+    try {
+      const { options } = await probeDownloadOptions(url);
+      setDownloadDialog({ loading: false, options });
+    } catch (e) {
+      setDownloadDialog({
+        loading: false,
+        options: [],
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const startDownload = async (option?: DownloadOption) => {
+    setDownloadDialog(null);
+    const url = detailRef.current?.episodes?.[currentEpisodeIndex];
+    if (!url || !currentSource || !currentId) return;
+    const id = offlineId(currentSource, currentId, currentEpisodeIndex);
+    if (isDownloading(id)) return;
     let lock: any = null;
     try {
       // 下载期间保持屏幕常亮（Safari 锁屏后会暂停下载）
@@ -1600,12 +1634,15 @@ function PlayPageClient() {
           sourceName: detailRef.current?.source_name || '',
           poster: videoCover,
           url,
+          variantUrl: option?.variantUrl,
+          quality: option?.label,
         },
         (p) => {
           if (offlineTargetRef.current !== id) return;
           setOfflineState({
             status: 'downloading',
             pct: p.partCount ? Math.floor((p.doneParts / p.partCount) * 100) : 0,
+            speed: p.speed,
           });
         }
       );
@@ -2510,7 +2547,11 @@ function PlayPageClient() {
                 >
                   <Download className='w-4 h-4' />
                   {offlineState.status === 'downloading'
-                    ? `下载中 ${offlineState.pct}%`
+                    ? `下载中 ${offlineState.pct}%${
+                        offlineState.speed
+                          ? ` · ${formatBytes(offlineState.speed)}/s`
+                          : ''
+                      }`
                     : offlineState.status === 'paused'
                       ? `继续下载 ${offlineState.pct}%`
                       : offlineState.status === 'done'
@@ -2519,6 +2560,64 @@ function PlayPageClient() {
                           ? '下载失败，重试'
                           : '下载本集'}
                 </button>
+                {downloadDialog && (
+                  <div
+                    className='fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4'
+                    onClick={() => setDownloadDialog(null)}
+                  >
+                    <div
+                      className='w-full max-w-sm rounded-xl bg-white dark:bg-gray-800 p-5 text-base font-normal text-gray-800 dark:text-gray-100 shadow-xl'
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className='text-lg font-semibold mb-1'>
+                        下载第 {currentEpisodeIndex + 1} 集
+                      </div>
+                      <div className='text-xs text-gray-500 dark:text-gray-400 mb-4'>
+                        当前源：{detail?.source_name || currentSource}
+                      </div>
+                      {downloadDialog.loading ? (
+                        <div className='text-sm text-gray-500 py-4'>
+                          正在分析清晰度和大小…
+                        </div>
+                      ) : downloadDialog.error ? (
+                        <div className='text-sm text-red-500 py-2'>
+                          分析失败：{downloadDialog.error}
+                          <br />
+                          这个源可能不支持下载，可以换一个源再试。
+                        </div>
+                      ) : (
+                        <div className='space-y-2'>
+                          {downloadDialog.options.map((o, i) => (
+                            <button
+                              key={i}
+                              onClick={() => startDownload(o)}
+                              className='w-full flex items-center justify-between px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-green-500/10'
+                            >
+                              <span className='font-medium'>{o.label}</span>
+                              <span className='text-sm text-gray-500 dark:text-gray-400'>
+                                {o.estBytes > 0
+                                  ? `约 ${formatBytes(o.estBytes)}`
+                                  : '大小未知'}
+                              </span>
+                            </button>
+                          ))}
+                          {downloadDialog.options.length === 1 && (
+                            <div className='text-xs text-gray-500 dark:text-gray-400 pt-1'>
+                              这个源只提供一种清晰度。想要更清晰，可以在右侧"换源"里选标注 1080p
+                              的源，再回来下载。
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => setDownloadDialog(null)}
+                        className='mt-4 w-full py-2 text-sm text-gray-500'
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
               </h1>
 
               {/* 关键信息行 */}
