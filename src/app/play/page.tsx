@@ -4,7 +4,7 @@
 
 import Artplayer from 'artplayer';
 import Hls from 'hls.js';
-import { Heart } from 'lucide-react';
+import { Download, Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
@@ -22,6 +22,13 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { filterAdsFromM3U8 } from '@/lib/m3u8AdFilter';
+import {
+  downloadEpisode,
+  getOfflineVideo,
+  isDownloading,
+  offlineId,
+  pauseDownload,
+} from '@/lib/offline';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
@@ -1526,6 +1533,98 @@ function PlayPageClient() {
   }, [currentSource, currentId]);
 
   // 切换收藏
+  // ---------- 离线下载（本集） ----------
+  const [offlineState, setOfflineState] = useState<{
+    status: 'none' | 'downloading' | 'paused' | 'done' | 'error';
+    pct: number;
+  }>({ status: 'none', pct: 0 });
+  const offlineTargetRef = useRef('');
+
+  useEffect(() => {
+    if (!currentSource || !currentId) return;
+    const id = offlineId(currentSource, currentId, currentEpisodeIndex);
+    offlineTargetRef.current = id;
+    if (isDownloading(id)) return;
+    let cancelled = false;
+    getOfflineVideo(id)
+      .then((v) => {
+        if (cancelled) return;
+        if (!v) return setOfflineState({ status: 'none', pct: 0 });
+        const pct = v.partCount
+          ? Math.floor((v.doneParts / v.partCount) * 100)
+          : 0;
+        setOfflineState({
+          status:
+            v.status === 'done'
+              ? 'done'
+              : v.status === 'error'
+                ? 'error'
+                : 'paused',
+          pct,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSource, currentId, currentEpisodeIndex]);
+
+  const handleDownload = async () => {
+    const url = detailRef.current?.episodes?.[currentEpisodeIndex];
+    if (!url || !currentSource || !currentId) return;
+    const id = offlineId(currentSource, currentId, currentEpisodeIndex);
+    if (isDownloading(id)) {
+      pauseDownload(id);
+      return;
+    }
+    if (offlineState.status === 'done') {
+      router.push('/offline');
+      return;
+    }
+    let lock: any = null;
+    try {
+      // 下载期间保持屏幕常亮（Safari 锁屏后会暂停下载）
+      lock = await (navigator as any).wakeLock?.request('screen');
+    } catch {
+      // ignore
+    }
+    setOfflineState({ status: 'downloading', pct: 0 });
+    try {
+      const v = await downloadEpisode(
+        {
+          source: currentSource,
+          videoId: currentId,
+          episodeIndex: currentEpisodeIndex,
+          episodeCount: detailRef.current?.episodes?.length || 1,
+          title: videoTitleRef.current || videoTitle,
+          sourceName: detailRef.current?.source_name || '',
+          poster: videoCover,
+          url,
+        },
+        (p) => {
+          if (offlineTargetRef.current !== id) return;
+          setOfflineState({
+            status: 'downloading',
+            pct: p.partCount ? Math.floor((p.doneParts / p.partCount) * 100) : 0,
+          });
+        }
+      );
+      if (offlineTargetRef.current === id) {
+        setOfflineState({
+          status: v.status === 'done' ? 'done' : 'paused',
+          pct: v.partCount ? Math.floor((v.doneParts / v.partCount) * 100) : 0,
+        });
+      }
+    } catch (e) {
+      console.error('离线下载失败:', e);
+      if (offlineTargetRef.current === id) {
+        setOfflineState({ status: 'error', pct: 0 });
+      }
+    } finally {
+      lock?.release?.().catch(() => undefined);
+    }
+  };
+
   const handleToggleFavorite = async () => {
     if (
       !videoTitleRef.current ||
@@ -2400,6 +2499,25 @@ function PlayPageClient() {
                   className='ml-3 flex-shrink-0 hover:opacity-80 transition-opacity'
                 >
                   <FavoriteIcon filled={favorited} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDownload();
+                  }}
+                  title='下载本集到本设备，离线观看'
+                  className='ml-3 flex-shrink-0 flex items-center gap-1 text-sm font-normal px-3 py-1 rounded-full border border-gray-400/60 text-gray-600 dark:text-gray-300 hover:opacity-80 transition-opacity whitespace-nowrap'
+                >
+                  <Download className='w-4 h-4' />
+                  {offlineState.status === 'downloading'
+                    ? `下载中 ${offlineState.pct}%`
+                    : offlineState.status === 'paused'
+                      ? `继续下载 ${offlineState.pct}%`
+                      : offlineState.status === 'done'
+                        ? '已下载'
+                        : offlineState.status === 'error'
+                          ? '下载失败，重试'
+                          : '下载本集'}
                 </button>
               </h1>
 
