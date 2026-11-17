@@ -11,6 +11,7 @@ import {
   downloadEpisode,
   DownloadProgress,
   formatBytes,
+  getActiveDownloads,
   getStorageEstimate,
   isDownloading,
   listOfflineVideos,
@@ -19,6 +20,7 @@ import {
   pauseDownload,
   registerOfflineServiceWorker,
   saveOfflinePlayTime,
+  subscribeDownloads,
   wipeAllOffline,
 } from '@/lib/offline';
 
@@ -46,6 +48,22 @@ export default function OfflinePage() {
       console.error('读取离线视频失败:', e);
     }
   }, []);
+
+  // 实时显示所有正在下载的任务（包括在播放页启动的）
+  useEffect(() => {
+    let activeIds = Object.keys(getActiveDownloads()).sort().join(',');
+    setProgress(getActiveDownloads());
+    return subscribeDownloads(() => {
+      const active = getActiveDownloads();
+      setProgress(active);
+      const ids = Object.keys(active).sort().join(',');
+      // 有任务开始或结束时刷新列表（新下载出现 / 状态变为已完成）
+      if (ids !== activeIds) {
+        activeIds = ids;
+        refresh();
+      }
+    });
+  }, [refresh]);
 
   useEffect(() => {
     registerOfflineServiceWorker();
