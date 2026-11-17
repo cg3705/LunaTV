@@ -54,6 +54,78 @@ interface WakeLockSentinel {
   removeEventListener(type: 'release', listener: () => void): void;
 }
 
+// ---------- 片名匹配（豆瓣片名 ↔ 采集站片名） ----------
+const CN_NUM: Record<string, number> = {
+  一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+};
+const cnToNum = (s: string) => {
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  if (s === '十') return 10;
+  if (s.startsWith('十')) return 10 + (CN_NUM[s[1]] || 0);
+  if (s.endsWith('十')) return (CN_NUM[s[0]] || 0) * 10;
+  if (s.includes('十')) return (CN_NUM[s[0]] || 0) * 10 + (CN_NUM[s[2]] || 0);
+  return CN_NUM[s] || 0;
+};
+/** 拆出季数（没写季数视为第 1 季）和去掉季数后的片名 */
+const splitSeason = (raw: string) => {
+  let season = 1;
+  const t = raw.replace(
+    /第\s*([一二两三四五六七八九十\d]+)\s*[季部]|season\s*(\d+)|\bs(\d+)\b/gi,
+    (_m, a, b, c) => {
+      season = a ? cnToNum(a) : parseInt(b || c, 10) || 1;
+      return '';
+    }
+  );
+  return { base: t, season };
+};
+/** 归一化：全角转半角、去空格和标点、统一季数写法、去掉片尾等于年份的数字 */
+const normalizeTitleForMatch = (title: string, year?: string) => {
+  const half = (title || '').normalize('NFKC').toLowerCase();
+  const split = splitSeason(half);
+  let season = split.season;
+  let t = split.base.replace(/[\s\p{P}\p{S}]+/gu, '');
+  if (year) {
+    const y = String(year).trim();
+    if (t.length > y.length && t.endsWith(y)) t = t.slice(0, -y.length);
+  }
+  // "沙丘2"="沙丘 第二部"：片名末尾单个数字 2～9 视为季数/部数
+  const tail = /\D([2-9])$/.exec(t);
+  if (season === 1 && tail) {
+    season = parseInt(tail[1], 10);
+    t = t.slice(0, -1);
+  }
+  return { base: t, season, key: `${t}#s${season}` };
+};
+/** 片名相似度（字符二元组的 Dice 系数），用于候选排序 */
+const titleSimilarity = (a: string, b: string) => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.9;
+  const grams = (s: string) => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) || 0) + 1);
+    }
+    return m;
+  };
+  const ga = grams(a);
+  const gb = grams(b);
+  let common = 0;
+  ga.forEach((n, g) => (common += Math.min(n, gb.get(g) || 0)));
+  const total = Math.max(1, a.length - 1 + b.length - 1);
+  return (2 * common) / total;
+};
+
+interface TitleCandidate {
+  title: string;
+  year: string;
+  episodes: number;
+  first: SearchResult;
+  sourceCount: number;
+  score: number;
+}
+
 function PlayPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -67,6 +139,8 @@ function PlayPageClient() {
   >('searching');
   const [loadingMessage, setLoadingMessage] = useState('正在搜索播放源...');
   const [error, setError] = useState<string | null>(null);
+  // 豆瓣片名在采集站里找不到同名资源时，给出的相近候选
+  const [titleCandidates, setTitleCandidates] = useState<TitleCandidate[]>([]);
   const [detail, setDetail] = useState<SearchResult | null>(null);
 
   // 收藏状态
@@ -1006,32 +1080,61 @@ function PlayPageClient() {
         }
         const data = await response.json();
 
-        // 片名归一化：去空格、转小写；部分源会在片名末尾加上年份（如"美人余2026""美人余(2026)"），
-        // 末尾 4 位数字等于该片年份时去掉，避免同一部剧因片名写法不同而无法换源
-        const normalizeTitle = (title: string, year?: string) => {
-          const t = (title || '').replace(/\s+/g, '').toLowerCase();
-          if (!year) return t;
-          return t.replace(/[（(【[]?(\d{4})[）)】\]]?$/, (m, y) =>
-            y === String(year).trim() && t.length > m.length ? '' : m
-          );
-        };
-        const targetTitle = normalizeTitle(
+        // 片名归一化：全角半角、空格标点、季数写法（第二季/第2季/Season 2/S2）、
+        // 片尾年份（如"美人余2026""美人余(2026)"）都统一后再比较
+        const target = normalizeTitleForMatch(
           videoTitleRef.current,
           videoYearRef.current
         );
+        const year = (videoYearRef.current || '').toLowerCase();
+        const typeOk = (result: SearchResult) =>
+          searchType
+            ? (searchType === 'tv' && result.episodes.length > 1) ||
+            (searchType === 'movie' && result.episodes.length === 1)
+            : true;
 
         // 处理搜索结果，根据规则过滤
         const results = data.results.filter(
           (result: SearchResult) =>
-            normalizeTitle(result.title, result.year) === targetTitle &&
-            (videoYearRef.current
-              ? result.year.toLowerCase() === videoYearRef.current.toLowerCase()
-              : true) &&
-            (searchType
-              ? (searchType === 'tv' && result.episodes.length > 1) ||
-              (searchType === 'movie' && result.episodes.length === 1)
-              : true)
+            normalizeTitleForMatch(result.title, result.year).key ===
+            target.key &&
+            (year ? result.year.toLowerCase() === year : true) &&
+            typeOk(result)
         );
+
+        // 没有同名资源时（常见于译名不同，如"转生就是剑"↔"转生成为魔剑了"），
+        // 列出同季数、年份相近、类型一致的结果让用户选择
+        if (results.length === 0) {
+          const groups = new Map<string, TitleCandidate>();
+          data.results.forEach((result: SearchResult) => {
+            const n = normalizeTitleForMatch(result.title, result.year);
+            const y = parseInt(result.year, 10);
+            const ty = parseInt(year, 10);
+            if (n.season !== target.season) return;
+            if (ty && y && Math.abs(y - ty) > 1) return;
+            if (!typeOk(result)) return;
+            const k = `${n.key}|${result.year}`;
+            const existed = groups.get(k);
+            if (existed) {
+              existed.sourceCount++;
+              existed.episodes = Math.max(existed.episodes, result.episodes.length);
+            } else {
+              groups.set(k, {
+                title: result.title,
+                year: result.year,
+                episodes: result.episodes.length,
+                first: result,
+                sourceCount: 1,
+                score: titleSimilarity(n.base, target.base),
+              });
+            }
+          });
+          setTitleCandidates(
+            Array.from(groups.values())
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 8)
+          );
+        }
         setAvailableSources(results);
         return results;
       } catch (err) {
@@ -2356,6 +2459,40 @@ function PlayPageClient() {
                 请检查网络连接或尝试刷新页面
               </p>
             </div>
+
+            {titleCandidates.length > 0 && (
+              <div className='mb-6 text-left'>
+                <p className='text-sm text-gray-600 dark:text-gray-300 mb-3'>
+                  没有找到同名资源，可能是下面这些（不同片源的译名可能不一样）：
+                </p>
+                <div className='space-y-2'>
+                  {titleCandidates.map((c) => (
+                    <button
+                      key={`${c.first.source}-${c.first.id}`}
+                      onClick={() => {
+                        const params = new URLSearchParams({
+                          source: c.first.source,
+                          id: c.first.id,
+                          title: c.title,
+                          year: c.year,
+                        });
+                        if (searchType) params.set('stype', searchType);
+                        window.location.href = `/play?${params.toString()}`;
+                      }}
+                      className='w-full px-4 py-3 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-green-500/10 border border-gray-200 dark:border-gray-700 transition-colors'
+                    >
+                      <div className='font-medium text-gray-900 dark:text-gray-100 truncate'>
+                        {c.title}
+                      </div>
+                      <div className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
+                        {c.year} · {c.episodes} 集 · {c.first.source_name}
+                        {c.sourceCount > 1 ? ` 等 ${c.sourceCount} 个源` : ''}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 操作按钮 */}
             <div className='space-y-3'>
