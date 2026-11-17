@@ -323,21 +323,25 @@ async function mediaStats(mediaUrl: string) {
   const { text, url } = await fetchText(mediaUrl);
   const filtered = filterAdsFromM3U8(text);
   let duration = 0;
-  let firstSeg = '';
-  let firstDur = 0;
   let pending = 0;
+  const segs: { url: string; dur: number }[] = [];
   for (const raw of filtered.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith('#EXTINF:')) pending = parseFloat(line.slice(8)) || 0;
     else if (line && !line.startsWith('#')) {
       duration += pending;
-      if (!firstSeg) {
-        firstSeg = abs(line, url);
-        firstDur = pending;
-      }
+      segs.push({ url: abs(line, url), dur: pending });
     }
   }
-  return { duration, firstSeg, firstDur };
+  // 取中间位置的切片：开头常有低分辨率的片头/标识，不具代表性
+  const mid = segs[Math.floor(segs.length / 2)];
+  const encrypted = /#EXT-X-KEY:(?!.*METHOD=NONE)/.test(filtered);
+  return {
+    duration,
+    sampleSeg: mid?.url || '',
+    sampleDur: mid?.dur || 0,
+    encrypted,
+  };
 }
 
 /**
@@ -368,12 +372,14 @@ export async function probeDownloadOptions(
   }
 
   const mediaUrl = variants[0]?.url || sourceUrl;
-  const { duration, firstSeg, firstDur } = await mediaStats(mediaUrl);
+  const { duration, sampleSeg, sampleDur, encrypted } = await mediaStats(
+    mediaUrl
+  );
   let estBytes = 0;
-  if (firstSeg && firstDur > 0) {
+  if (sampleSeg && sampleDur > 0) {
     try {
-      const buf = await fetchBuffer(firstSeg);
-      estBytes = (buf.byteLength / firstDur) * duration;
+      const buf = await fetchBuffer(sampleSeg);
+      estBytes = (buf.byteLength / sampleDur) * duration;
     } catch {
       estBytes = 0;
     }
@@ -382,11 +388,27 @@ export async function probeDownloadOptions(
     ? qualityLabel(variants[0].width, variants[0].height)
     : '';
   if (!label) {
+    // 用只含中间那个切片的临时播放列表来检测分辨率
+    let probeUrl = mediaUrl;
+    if (sampleSeg && !encrypted) {
+      probeUrl = URL.createObjectURL(
+        new Blob(
+          [
+            `#EXTM3U\n#EXT-X-TARGETDURATION:${
+              Math.ceil(sampleDur) || 10
+            }\n#EXTINF:${sampleDur},\n${sampleSeg}\n#EXT-X-ENDLIST\n`,
+          ],
+          { type: 'application/vnd.apple.mpegurl' }
+        )
+      );
+    }
     try {
-      const info = await getVideoResolutionFromM3u8(mediaUrl);
+      const info = await getVideoResolutionFromM3u8(probeUrl);
       label = info.quality !== '未知' ? info.quality : '';
     } catch {
       label = '';
+    } finally {
+      if (probeUrl.startsWith('blob:')) URL.revokeObjectURL(probeUrl);
     }
   }
   return {
