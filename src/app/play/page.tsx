@@ -1131,6 +1131,8 @@ function PlayPageClient() {
           });
           setTitleCandidates(
             Array.from(groups.values())
+              // 片名毫无相同字词的结果（搜索引擎凑数返回的）不列出
+              .filter((c) => c.score > 0)
               .sort((a, b) => b.score - a.score)
               .slice(0, 8)
           );
@@ -2418,6 +2420,83 @@ function PlayPageClient() {
     );
   }
 
+  // 没有同名资源但有相近候选：横向卡片布局
+  if (error && titleCandidates.length > 0) {
+    return (
+      <PageLayout activePath='/play'>
+        <div className='px-4 sm:px-10 py-6 max-w-6xl'>
+          <div className='flex flex-wrap items-start justify-between gap-3 mb-5'>
+            <div className='min-w-0'>
+              <h2 className='text-xl font-bold text-gray-800 dark:text-gray-100'>
+                没找到《{videoTitle}》的同名资源
+              </h2>
+              <p className='text-sm text-gray-500 dark:text-gray-400 mt-1'>
+                不同片源的译名可能不一样，下面是名字相近的结果，点一下即可播放
+              </p>
+            </div>
+            <div className='flex gap-2 flex-shrink-0'>
+              <button
+                onClick={() =>
+                  router.push(`/search?q=${encodeURIComponent(videoTitle)}`)
+                }
+                className='px-4 py-2 text-sm rounded-lg bg-green-500 text-white hover:bg-green-600'
+              >
+                去搜索
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className='px-4 py-2 text-sm rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:opacity-80'
+              >
+                重试
+              </button>
+            </div>
+          </div>
+          <div className='grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+            {titleCandidates.map((c) => (
+              <button
+                key={`${c.first.source}-${c.first.id}`}
+                onClick={() => {
+                  const params = new URLSearchParams({
+                    source: c.first.source,
+                    id: c.first.id,
+                    title: c.title,
+                    year: c.year,
+                  });
+                  if (searchType) params.set('stype', searchType);
+                  window.location.href = `/play?${params.toString()}`;
+                }}
+                className='flex items-center gap-3 p-3 text-left rounded-xl bg-gray-100 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 hover:border-green-500 hover:bg-green-500/10 transition-colors'
+              >
+                <div className='w-12 h-16 flex-shrink-0 rounded overflow-hidden bg-gray-300 dark:bg-gray-700'>
+                  {c.first.poster && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={processImageUrl(c.first.poster)}
+                      alt={c.title}
+                      className='w-full h-full object-cover'
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  )}
+                </div>
+                <div className='min-w-0'>
+                  <div className='font-medium text-gray-900 dark:text-gray-100 line-clamp-2'>
+                    {c.title}
+                  </div>
+                  <div className='text-xs text-gray-500 dark:text-gray-400 mt-1 whitespace-nowrap'>
+                    {c.year} · {c.episodes} 集 · {c.first.source_name}
+                    {c.sourceCount > 1 ? ` 等 ${c.sourceCount} 个源` : ''}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </PageLayout>
+    );
+  }
+
   if (error) {
     return (
       <PageLayout activePath='/play'>
@@ -2459,40 +2538,6 @@ function PlayPageClient() {
                 请检查网络连接或尝试刷新页面
               </p>
             </div>
-
-            {titleCandidates.length > 0 && (
-              <div className='mb-6 text-left'>
-                <p className='text-sm text-gray-600 dark:text-gray-300 mb-3'>
-                  没有找到同名资源，可能是下面这些（不同片源的译名可能不一样）：
-                </p>
-                <div className='space-y-2'>
-                  {titleCandidates.map((c) => (
-                    <button
-                      key={`${c.first.source}-${c.first.id}`}
-                      onClick={() => {
-                        const params = new URLSearchParams({
-                          source: c.first.source,
-                          id: c.first.id,
-                          title: c.title,
-                          year: c.year,
-                        });
-                        if (searchType) params.set('stype', searchType);
-                        window.location.href = `/play?${params.toString()}`;
-                      }}
-                      className='w-full px-4 py-3 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-green-500/10 border border-gray-200 dark:border-gray-700 transition-colors'
-                    >
-                      <div className='font-medium text-gray-900 dark:text-gray-100 truncate'>
-                        {c.title}
-                      </div>
-                      <div className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
-                        {c.year} · {c.episodes} 集 · {c.first.source_name}
-                        {c.sourceCount > 1 ? ` 等 ${c.sourceCount} 个源` : ''}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* 操作按钮 */}
             <div className='space-y-3'>
