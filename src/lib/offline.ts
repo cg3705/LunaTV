@@ -4,6 +4,7 @@
 import Hls from 'hls.js';
 
 import { filterAdsFromM3U8 } from '@/lib/m3u8AdFilter';
+import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 
 /**
  * 离线下载（第一版：单集下载 + 离线播放）
@@ -31,6 +32,8 @@ export interface OfflineVideo {
   sourceName: string;
   poster: string;
   sourceUrl: string; // 原始 m3u8 地址
+  variantUrl?: string; // 选定的清晰度对应的子播放列表（主列表有多个清晰度时）
+  quality?: string; // 如 1080p
   playlist: string; // 改写后的播放列表
   partCount: number; // 需要下载的文件数（切片 + 密钥 + 初始化分片）
   doneParts: number;
@@ -47,6 +50,14 @@ export interface DownloadProgress {
   doneParts: number;
   partCount: number;
   bytes: number;
+  speed: number; // 字节/秒（最近几秒的平均）
+}
+
+export interface DownloadOption {
+  label: string; // 如 1080p
+  variantUrl?: string;
+  estBytes: number; // 预计大小
+  bandwidth?: number;
 }
 
 // ---------------- IndexedDB ----------------
@@ -112,11 +123,17 @@ export async function saveOfflinePlayTime(id: string, playTime: number) {
 
 const partKey = (id: string, index: number) => `${id}/${index}`;
 
-async function getPart(id: string, index: number) {
+async function getPart(
+  id: string,
+  index: number
+): Promise<ArrayBuffer | undefined> {
   const s = await store(STORE_PARTS, 'readonly');
-  return (await reqToPromise(s.get(partKey(id, index)))) as
+  const v = (await reqToPromise(s.get(partKey(id, index)))) as
     | ArrayBuffer
+    | Blob
     | undefined;
+  if (!v) return undefined;
+  return v instanceof Blob ? await v.arrayBuffer() : v;
 }
 
 async function hasPart(id: string, index: number) {
@@ -127,7 +144,9 @@ async function hasPart(id: string, index: number) {
 
 async function putPart(id: string, index: number, data: ArrayBuffer) {
   const s = await store(STORE_PARTS, 'readwrite');
-  await reqToPromise(s.put(data, partKey(id, index)));
+  // 以 Blob 存储：Safari 会把它存成独立文件，删除时能真正释放空间
+  // （存 ArrayBuffer 时数据写在数据库文件里，删除后文件不会缩小）
+  await reqToPromise(s.put(new Blob([data]), partKey(id, index)));
 }
 
 export async function deleteOfflineVideo(id: string) {
@@ -141,6 +160,20 @@ export async function deleteOfflineVideo(id: string) {
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+  });
+}
+
+/** 删除整个离线数据库（用于回收 Safari 未释放的空间） */
+export async function wipeAllOffline() {
+  running.forEach((c) => c.abort());
+  const db = await dbPromise?.catch(() => null);
+  db?.close();
+  dbPromise = null;
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => resolve();
   });
 }
 
@@ -189,8 +222,12 @@ const abs = (uri: string, base: string) => new URL(uri, base).href;
 const enc = (id: string) => encodeURIComponent(id);
 
 /** 取媒体播放列表（主列表时选最高码率的子列表），并改写成离线地址 */
-async function buildOfflinePlaylist(sourceUrl: string, id: string) {
-  let { text, url } = await fetchText(sourceUrl);
+async function buildOfflinePlaylist(
+  sourceUrl: string,
+  id: string,
+  variantUrl?: string
+) {
+  let { text, url } = await fetchText(variantUrl || sourceUrl);
   if (!text.trimStart().startsWith('#EXTM3U'))
     throw new Error('不是有效的播放列表');
 
@@ -242,6 +279,128 @@ async function buildOfflinePlaylist(sourceUrl: string, id: string) {
   return { playlist: out.join('\n'), parts, duration };
 }
 
+function parseVariants(text: string, base: string) {
+  const lines = text.split(/\r?\n/);
+  const out: {
+    url: string;
+    bandwidth: number;
+    width: number;
+    height: number;
+  }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF')) continue;
+    const uri = (lines[i + 1] || '').trim();
+    if (!uri || uri.startsWith('#')) continue;
+    const bw = parseInt(/BANDWIDTH=(\d+)/.exec(lines[i])?.[1] || '0', 10);
+    const res = /RESOLUTION=(\d+)x(\d+)/.exec(lines[i]);
+    out.push({
+      url: abs(uri, base),
+      bandwidth: bw,
+      width: res ? parseInt(res[1], 10) : 0,
+      height: res ? parseInt(res[2], 10) : 0,
+    });
+  }
+  return out;
+}
+
+const qualityLabel = (width: number, height = 0) => {
+  const w = Math.max(width, Math.round((height * 16) / 9));
+  if (!w) return '';
+  return w >= 3840
+    ? '4K'
+    : w >= 2560
+    ? '2K'
+    : w >= 1920
+    ? '1080p'
+    : w >= 1280
+    ? '720p'
+    : w >= 854
+    ? '480p'
+    : 'SD';
+};
+
+async function mediaStats(mediaUrl: string) {
+  const { text, url } = await fetchText(mediaUrl);
+  const filtered = filterAdsFromM3U8(text);
+  let duration = 0;
+  let firstSeg = '';
+  let firstDur = 0;
+  let pending = 0;
+  for (const raw of filtered.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('#EXTINF:')) pending = parseFloat(line.slice(8)) || 0;
+    else if (line && !line.startsWith('#')) {
+      duration += pending;
+      if (!firstSeg) {
+        firstSeg = abs(line, url);
+        firstDur = pending;
+      }
+    }
+  }
+  return { duration, firstSeg, firstDur };
+}
+
+/**
+ * 分析一集可下载的清晰度和预计大小。
+ * 主列表有多个清晰度时按 BANDWIDTH 估算；只有一个时下载首个切片来估算大小。
+ */
+export async function probeDownloadOptions(
+  sourceUrl: string
+): Promise<{ options: DownloadOption[]; duration: number }> {
+  const { text, url } = await fetchText(sourceUrl);
+  const variants = text.includes('#EXT-X-STREAM-INF')
+    ? parseVariants(text, url)
+    : [];
+
+  if (variants.length > 1) {
+    const { duration } = await mediaStats(variants[0].url);
+    const options = variants
+      .sort((a, b) => b.bandwidth - a.bandwidth)
+      .map((v) => ({
+        label:
+          qualityLabel(v.width, v.height) ||
+          `${Math.round(v.bandwidth / 1000)} kbps`,
+        variantUrl: v.url,
+        bandwidth: v.bandwidth,
+        estBytes: (v.bandwidth / 8) * duration,
+      }));
+    return { options, duration };
+  }
+
+  const mediaUrl = variants[0]?.url || sourceUrl;
+  const { duration, firstSeg, firstDur } = await mediaStats(mediaUrl);
+  let estBytes = 0;
+  if (firstSeg && firstDur > 0) {
+    try {
+      const buf = await fetchBuffer(firstSeg);
+      estBytes = (buf.byteLength / firstDur) * duration;
+    } catch {
+      estBytes = 0;
+    }
+  }
+  let label = variants[0]
+    ? qualityLabel(variants[0].width, variants[0].height)
+    : '';
+  if (!label) {
+    try {
+      const info = await getVideoResolutionFromM3u8(mediaUrl);
+      label = info.quality !== '未知' ? info.quality : '';
+    } catch {
+      label = '';
+    }
+  }
+  return {
+    options: [
+      {
+        label: label || '原画',
+        variantUrl: variants[0]?.url,
+        estBytes,
+      },
+    ],
+    duration,
+  };
+}
+
 const running = new Map<string, AbortController>();
 
 export function isDownloading(id: string) {
@@ -265,6 +424,8 @@ export async function downloadEpisode(
     sourceName: string;
     poster: string;
     url: string;
+    variantUrl?: string;
+    quality?: string;
   },
   onProgress?: (p: DownloadProgress) => void
 ): Promise<OfflineVideo> {
@@ -282,11 +443,14 @@ export async function downloadEpisode(
     }
     registerOfflineServiceWorker();
 
+    const existing = await getOfflineVideo(id);
+    const variantUrl = meta.variantUrl ?? existing?.variantUrl;
+    const quality = meta.quality ?? existing?.quality;
     const { playlist, parts, duration } = await buildOfflinePlaylist(
       meta.url,
-      id
+      id,
+      variantUrl
     );
-    const existing = await getOfflineVideo(id);
     let video: OfflineVideo = {
       id,
       title: meta.title,
@@ -295,6 +459,8 @@ export async function downloadEpisode(
       sourceName: meta.sourceName,
       poster: meta.poster,
       sourceUrl: meta.url,
+      variantUrl,
+      quality,
       playlist,
       partCount: parts.length,
       doneParts: 0,
@@ -318,10 +484,20 @@ export async function downloadEpisode(
       if (await hasPart(id, i)) video.doneParts++;
       else todo.push(i);
     }
+    // 下载速度：最近约 5 秒内下载的字节数
+    const recent: { t: number; n: number }[] = [];
+    const speed = () => {
+      const now = Date.now();
+      while (recent.length && now - recent[0].t > 5000) recent.shift();
+      if (!recent.length) return 0;
+      const total = recent.reduce((a, r) => a + r.n, 0);
+      return total / Math.max(1, (now - recent[0].t) / 1000);
+    };
     onProgress?.({
       doneParts: video.doneParts,
       partCount: parts.length,
       bytes: video.bytes,
+      speed: 0,
     });
 
     let cursor = 0;
@@ -335,10 +511,12 @@ export async function downloadEpisode(
         await putPart(id, i, data);
         video.doneParts++;
         video.bytes += data.byteLength;
+        recent.push({ t: Date.now(), n: data.byteLength });
         onProgress?.({
           doneParts: video.doneParts,
           partCount: parts.length,
           bytes: video.bytes,
+          speed: speed(),
         });
         if (Date.now() - lastSave > 3000) {
           lastSave = Date.now();
