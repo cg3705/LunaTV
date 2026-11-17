@@ -196,3 +196,13 @@ div[data-media-provider] video {
     top: max(env(safe-area-inset-top, 0px), 28px) !important;
   }
 }
+
+/* 换源列表：面板较窄时（如 iPad 横屏）隐藏封面，把宽度留给剧名、来源、清晰度和网速 */
+.source-list {
+  container-type: inline-size;
+}
+@container (max-width: 300px) {
+  .source-cover {
+    display: none !important;
+  }
+}
