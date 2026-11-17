@@ -19,6 +19,7 @@ import {
   pauseDownload,
   registerOfflineServiceWorker,
   saveOfflinePlayTime,
+  wipeAllOffline,
 } from '@/lib/offline';
 
 import PageLayout from '@/components/PageLayout';
@@ -166,6 +167,24 @@ export default function OfflinePage() {
           <div className='text-center text-gray-500 py-16'>还没有离线视频</div>
         ) : (
           <div className='space-y-3'>
+            <div className='flex justify-end'>
+              <button
+                onClick={async () => {
+                  if (
+                    !confirm(
+                      '删除全部离线视频，并彻底清空离线数据库？\n（如果删除后"已用空间"没有变小，用这个可以真正释放空间）'
+                    )
+                  )
+                    return;
+                  setPlaying(null);
+                  await wipeAllOffline();
+                  refresh();
+                }}
+                className='text-xs text-red-500 hover:underline'
+              >
+                清空全部离线数据
+              </button>
+            </div>
             {videos.map((v) => {
               const p = progress[v.id];
               const done = p ? p.doneParts : v.doneParts;
@@ -196,6 +215,11 @@ export default function OfflinePage() {
                       {v.title}
                     </div>
                     <div className='text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap'>
+                      {v.quality && (
+                        <span className='mr-1 px-1 rounded bg-green-500/15 text-green-600 dark:text-green-400'>
+                          {v.quality}
+                        </span>
+                      )}
                       第 {v.episodeIndex + 1} 集 · {v.sourceName} ·{' '}
                       {formatBytes(bytes)}
                       {v.duration > 0 &&
@@ -211,7 +235,9 @@ export default function OfflinePage() {
                         </div>
                         <div className='text-xs mt-0.5 text-gray-500'>
                           {downloading
-                            ? `下载中 ${pct}%`
+                            ? `下载中 ${pct}%${
+                                p?.speed ? ` · ${formatBytes(p.speed)}/s` : ''
+                              }`
                             : v.status === 'error'
                             ? `下载出错（${v.error || '未知原因'}），可继续下载`
                             : `已暂停 ${pct}%`}
