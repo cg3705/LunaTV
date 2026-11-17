@@ -384,10 +384,10 @@ export async function probeDownloadOptions(
       estBytes = 0;
     }
   }
-  let label = variants[0]
-    ? qualityLabel(variants[0].width, variants[0].height)
-    : '';
-  if (!label) {
+  // 只有一种清晰度时不信任主列表里声明的 RESOLUTION
+  // （如意资源统一写成 1080x608，实际是 1920x1080），直接读视频本身
+  let label = '';
+  {
     // 用只含中间那个切片的临时播放列表来检测分辨率
     let probeUrl = mediaUrl;
     if (sampleSeg && !encrypted) {
