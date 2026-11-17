@@ -174,3 +174,25 @@ div[data-media-provider] video {
     display: none !important;
   }
 }
+
+/*
+ * 网页全屏时避开系统界面：iPad 桌面网页 App 顶部的窗口控制"···"、
+ * iPhone 刘海和底部横条。页面使用了 viewport-fit=cover，内容会延伸到这些区域下面，
+ * 所以把播放器四边按安全区向内收，收出来的区域用黑色填充。
+ */
+.art-video-player.art-fullscreen-web {
+  top: env(safe-area-inset-top, 0px) !important;
+  bottom: env(safe-area-inset-bottom, 0px) !important;
+  left: env(safe-area-inset-left, 0px) !important;
+  right: env(safe-area-inset-right, 0px) !important;
+  width: auto !important;
+  height: auto !important;
+  box-shadow: 0 0 0 100vmax #000;
+}
+
+/* 桌面网页 App（独立窗口）里，顶部的"···"不一定计入安全区，至少留出 28px */
+@media (display-mode: standalone) {
+  .art-video-player.art-fullscreen-web {
+    top: max(env(safe-area-inset-top, 0px), 28px) !important;
+  }
+}
