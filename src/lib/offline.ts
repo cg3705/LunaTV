@@ -425,6 +425,24 @@ export async function probeDownloadOptions(
 
 const running = new Map<string, AbortController>();
 
+// 全局下载进度：任何页面都能订阅（在 MTV 内切换页面时下载会继续）
+const progressMap = new Map<string, DownloadProgress>();
+const listeners = new Set<() => void>();
+const emitProgress = () => listeners.forEach((l) => l());
+
+/** 订阅下载进度变化，返回取消订阅函数 */
+export function subscribeDownloads(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+/** 当前正在下载的任务及进度 */
+export function getActiveDownloads(): Record<string, DownloadProgress> {
+  return Object.fromEntries(progressMap);
+}
+
 export function isDownloading(id: string) {
   return running.has(id);
 }
@@ -455,6 +473,11 @@ export async function downloadEpisode(
   if (running.has(id)) throw new Error('这一集正在下载');
   const controller = new AbortController();
   running.set(id, controller);
+  const report = (p: DownloadProgress) => {
+    progressMap.set(id, p);
+    emitProgress();
+    onProgress?.(p);
+  };
 
   try {
     // 尽量申请持久存储，避免被系统清理
@@ -515,7 +538,7 @@ export async function downloadEpisode(
       const total = recent.reduce((a, r) => a + r.n, 0);
       return total / Math.max(1, (now - recent[0].t) / 1000);
     };
-    onProgress?.({
+    report({
       doneParts: video.doneParts,
       partCount: parts.length,
       bytes: video.bytes,
@@ -534,7 +557,7 @@ export async function downloadEpisode(
         video.doneParts++;
         video.bytes += data.byteLength;
         recent.push({ t: Date.now(), n: data.byteLength });
-        onProgress?.({
+        report({
           doneParts: video.doneParts,
           partCount: parts.length,
           bytes: video.bytes,
@@ -570,6 +593,8 @@ export async function downloadEpisode(
     throw e;
   } finally {
     running.delete(id);
+    progressMap.delete(id);
+    emitProgress();
   }
 }
 
