@@ -123,6 +123,9 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
       let hasMetadataLoaded = false;
 
       let fragmentStartTime = 0;
+      // Safari 对不显示的 video 不解码画面，videoWidth 一直是 0；
+      // 改从 hls.js 解析到的数据里取宽度作为后备
+      let parsedWidth = 0;
 
       // 检查是否可以返回结果
       const checkAndResolve = () => {
@@ -131,7 +134,7 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
           (hasSpeedCalculated || actualLoadSpeed !== '未知')
         ) {
           clearTimeout(timeout);
-          const width = video.videoWidth;
+          const width = video.videoWidth || parsedWidth;
           // 无论能否取到尺寸，都必须释放 hls 实例与 video 元素，
           // 否则测速结束后实例仍会在后台持续拉流，造成内存与带宽泄漏
           cleanup();
@@ -165,6 +168,18 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
           }
         }
       };
+
+      // 主播放列表里写明的分辨率（RESOLUTION=1920x1080）
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        const w = Math.max(0, ...hls.levels.map((l) => l.width || 0));
+        if (w > 0 && !parsedWidth) parsedWidth = w;
+      });
+
+      // 首个分片解析出的视频轨道尺寸（不依赖浏览器解码画面）
+      hls.on(Hls.Events.FRAG_PARSING_INIT_SEGMENT, (event: any, data: any) => {
+        const w = data?.tracks?.video?.metadata?.width;
+        if (typeof w === 'number' && w > 0) parsedWidth = w;
+      });
 
       // 监听片段加载开始
       hls.on(Hls.Events.FRAG_LOADING, () => {
