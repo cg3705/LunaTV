@@ -517,7 +517,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           {!sourceSearchLoading &&
             !sourceSearchError &&
             availableSources.length > 0 && (
-              <div className='flex-1 overflow-y-auto space-y-2 pb-20'>
+              <div className='source-list flex-1 overflow-y-auto space-y-2 pb-20'>
                 {availableSources
                   .sort((a, b) => {
                     const aIsCurrent =
@@ -547,7 +547,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                           }`.trim()}
                       >
                         {/* 封面 */}
-                        <div className='flex-shrink-0 w-12 h-20 bg-gray-300 dark:bg-gray-600 rounded overflow-hidden'>
+                        <div className='source-cover flex-shrink-0 w-12 h-20 bg-gray-300 dark:bg-gray-600 rounded overflow-hidden'>
                           {source.episodes && source.episodes.length > 0 && (
                             <img
                               src={processImageUrl(source.poster)}
@@ -584,7 +584,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                               if (videoInfo && videoInfo.quality !== '未知') {
                                 if (videoInfo.hasError) {
                                   return (
-                                    <div className='bg-gray-500/10 dark:bg-gray-400/20 text-red-600 dark:text-red-400 px-1.5 py-0 rounded text-xs flex-shrink-0 min-w-[50px] text-center'>
+                                    <div className='bg-gray-500/10 dark:bg-gray-400/20 text-red-600 dark:text-red-400 px-1.5 py-0 rounded text-xs flex-shrink-0 min-w-[50px] text-center whitespace-nowrap'>
                                       检测失败
                                     </div>
                                   );
@@ -604,7 +604,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
                                   return (
                                     <div
-                                      className={`bg-gray-500/10 dark:bg-gray-400/20 ${textColorClasses} px-1.5 py-0 rounded text-xs flex-shrink-0 min-w-[50px] text-center`}
+                                      className={`bg-gray-500/10 dark:bg-gray-400/20 ${textColorClasses} px-1.5 py-0 rounded text-xs flex-shrink-0 min-w-[50px] text-center whitespace-nowrap`}
                                     >
                                       {videoInfo.quality}
                                     </div>
@@ -617,12 +617,12 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                           </div>
 
                           {/* 源名称和集数信息 - 垂直居中 */}
-                          <div className='flex items-center justify-between'>
-                            <span className='text-xs px-2 py-1 border border-gray-500/60 rounded text-gray-700 dark:text-gray-300'>
+                          <div className='flex items-center justify-between gap-2 min-w-0'>
+                            <span className='text-xs px-2 py-1 border border-gray-500/60 rounded text-gray-700 dark:text-gray-300 whitespace-nowrap truncate min-w-0'>
                               {source.source_name}
                             </span>
                             {source.episodes.length > 1 && (
-                              <span className='text-xs text-gray-500 dark:text-gray-400 font-medium'>
+                              <span className='text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap flex-shrink-0'>
                                 {source.episodes.length} 集
                               </span>
                             )}
@@ -636,7 +636,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                               if (videoInfo) {
                                 if (!videoInfo.hasError) {
                                   return (
-                                    <div className='flex items-end gap-3 text-xs'>
+                                    <div className='flex items-end gap-2 text-xs whitespace-nowrap'>
                                       <div className='text-green-600 dark:text-green-400 font-medium text-xs'>
                                         {videoInfo.loadSpeed}
                                       </div>
@@ -647,7 +647,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                   );
                                 } else {
                                   return (
-                                    <div className='text-red-500/90 dark:text-red-400 font-medium text-xs'>
+                                    <div className='text-red-500/90 dark:text-red-400 font-medium text-xs whitespace-nowrap'>
                                       无测速数据
                                     </div>
                                   ); // 占位div
