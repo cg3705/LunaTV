@@ -534,13 +534,19 @@ function PlayPageClient() {
 
   const ensureVideoSource = (video: HTMLVideoElement | null, url: string) => {
     if (!video || !url) return;
-    const sources = Array.from(video.getElementsByTagName('source'));
-    const existed = sources.some((s) => s.src === url);
-    if (!existed) {
-      // 移除旧的 source，保持唯一
-      sources.forEach((s) => s.remove());
+    // 只管理自己添加的备用 source（供 AirPlay 投送使用），不能动其它 source：
+    // iPad/iPhone 上 hls.js 用 ManagedMediaSource，是通过一个 blob: 的 <source> 挂载视频流的，
+    // 删掉它 Safari 会改用原始 m3u8 自己播放，去广告就失效了
+    const ours = Array.from(
+      video.querySelectorAll<HTMLSourceElement>('source[data-airplay]')
+    );
+    if (!ours.some((s) => s.src === url)) {
+      ours.forEach((s) => s.remove());
       const sourceEl = document.createElement('source');
       sourceEl.src = url;
+      sourceEl.type = 'application/x-mpegURL';
+      sourceEl.setAttribute('data-airplay', '1');
+      // 追加在最后：Safari 优先用排在前面的 hls.js 视频流，投送时才用这个备用地址
       video.appendChild(sourceEl);
     }
 
